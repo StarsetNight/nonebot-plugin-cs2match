@@ -2,21 +2,19 @@
 # SPDX-License-Identifier: MIT
 
 import os
-import pillowmd
 from dotenv import load_dotenv
-from io import BytesIO
 
 from nonebot import logger
 from nonebot import get_driver, get_plugin_config
 from nonebot import on_command
-from nonebot.adapters.onebot.v11 import Message, MessageSegment
+from nonebot.adapters.onebot.v11 import Message, MessageSegment, GROUP_ADMIN, GROUP_OWNER
 from nonebot.params import CommandArg
 from nonebot.permission import SUPERUSER
 from nonebot.plugin import PluginMetadata
 
 from .config import Config
-from .tools import PandaScoreClient, MatchParser
-from .help import help_text
+from .tools import PandaScoreClient, MatchParser, typst_render
+from .typst_template import help_text
 from .rule import is_enabled
 
 driver = get_driver()
@@ -24,8 +22,6 @@ global_config = driver.config
 config = get_plugin_config(Config)
 
 load_dotenv()
-
-style = pillowmd.MdStyle()
 
 if PANDASCORE_TOKEN := os.getenv("PANDASCORE_TOKEN"):
     panda_client = PandaScoreClient(PANDASCORE_TOKEN)
@@ -50,13 +46,15 @@ __plugin_meta__ = PluginMetadata(
 
 get_help = on_command("cs2help", aliases={"cs2帮助"}, priority=10, block=True)
 list_matches = on_command("matches", aliases={"比赛列表"}, rule=is_enabled, priority=10, block=True)
+check_match = on_command("match", aliases={"比分"}, rule=is_enabled, priority=10, block=True)
+check_team = on_command("team", aliases={"查战队"}, rule=is_enabled, priority=10, block=True)
+monitor_match = on_command("monitor", aliases={"监视"}, rule=is_enabled,
+                           permission=SUPERUSER | GROUP_OWNER | GROUP_ADMIN, priority=10, block=True)
 
 
 @get_help.handle()
 async def on_get_help():
-    io = BytesIO()
-    (await style.AioRender(help_text, "CS2 帮助")).image.save(io, format="png")
-    await get_help.finish(MessageSegment.image(io))
+    await get_help.finish(await typst_render(help_text))
 
 
 @list_matches.handle()
@@ -73,16 +71,20 @@ async def on_list_matches(args: Message = CommandArg()):
 
     func = func_map.get(arg, panda_client.list_matches)
     matches = await func()
-    match_content = ""
+    match_content = typst_template.list_match
     for match in reversed(matches):
         match_json = await MatchParser.parse(match)
-        match_content += (f"### {match_json['name']}\n\n"
-                          f"{match_json['slug']}"
-                          f"**时间:** `{match_json['time']}`  \n"
-                          f"**比分:** {match_json['team_a']} `{match_json['score_a']} - {match_json['score_b']}` {match_json['team_b']}  \n"
-                          f"**状态:** {match_json['status']}\n"
-                          "------\n")
-    io = BytesIO()
-    (await style.AioRender(match_content, "CS2 比赛列表")).image.save(io, format="png")
-    await list_matches.finish(MessageSegment.image(io))
+        match_content += (
+            f"#match_card("
+            f'"{match_json["name"]}",'
+            f'"{match_json["time"]}",'
+            f'"{match_json["team_a"]}",'
+            f"{match_json['score_a']},"
+            f"{match_json['score_b']},"
+            f'"{match_json["team_b"]}",'
+            f"{match_json['status']}"
+            f")\n"
+        )
+
+    await list_matches.finish(await typst_render(match_content))
 

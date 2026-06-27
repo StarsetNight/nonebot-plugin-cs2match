@@ -2,7 +2,33 @@
 # SPDX-License-Identifier: MIT
 
 import aiohttp
+import typst
+from io import BytesIO
 from typing import Any
+from datetime import datetime, timezone, timedelta
+
+from nonebot.adapters.onebot.v11 import MessageSegment
+
+def format_iso(iso: str) -> str:
+    try:
+        if not iso:
+            return "时间未知"
+
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+
+        dt_sh = dt.astimezone(
+            timezone(timedelta(hours=8))
+        )
+
+        return dt_sh.strftime("%m-%d %H:%M")
+
+    except ValueError:
+        return "时间未知"
+
+
+async def typst_render(typst_content: str) -> MessageSegment.image:
+    # TODO 缓存处理
+    return MessageSegment.image(BytesIO(typst.compile(typst_content.encode(), format="png", ppi=144.0)))
 
 
 class MatchParser:
@@ -40,26 +66,15 @@ class MatchParser:
             score_a = score_map.get(a_id)
             score_b = score_map.get(b_id)
 
-        # 状态中文化
-        status_map = {
-            "not_started": "未开始",
-            "running": "进行中",
-            "finished": "已结束",
-            "canceled": "取消",
-            "postponed": "延期",
-        }
-
-        status_text = status_map.get(status, status)
-
         return {
             "name": name,
             "slug": slug,
-            "time": time,
+            "time": format_iso(time),
             "team_a": team_a,
             "team_b": team_b,
             "score_a": score_a,
             "score_b": score_b,
-            "status": status_text,
+            "status": status,
         }
 
 
