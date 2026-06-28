@@ -6,8 +6,11 @@ import typst
 from io import BytesIO
 from typing import Any
 from datetime import datetime, timezone, timedelta
+from collections import defaultdict
 
 from nonebot.adapters.onebot.v11 import MessageSegment
+
+from . import typst_template
 
 def format_iso(iso: str) -> str:
     try:
@@ -35,7 +38,7 @@ class MatchParser:
     @staticmethod
     async def parse(match: dict[str, Any]) -> dict[str, Any]:
         # 基础信息
-        name = match.get("serie", {}).get("full_name", "Unknown Match")
+        serie = match.get("serie", {}).get("full_name", "Unknown Match")
         slug = match.get("slug", "unknown")
         time = match.get("scheduled_at") or match.get("begin_at") or "unknown time"
         status = match.get("status", "unknown")
@@ -67,7 +70,7 @@ class MatchParser:
             score_b = score_map.get(b_id)
 
         return {
-            "name": name,
+            "serie": serie,
             "slug": slug,
             "time": format_iso(time),
             "team_a": team_a,
@@ -76,6 +79,38 @@ class MatchParser:
             "score_b": score_b,
             "status": status,
         }
+
+    @classmethod
+    async def prerender_list(cls, matches):
+        series = defaultdict(list)
+
+        for match in reversed(matches):
+            serie = (match.get("serie") or {}).get("full_name", "未知赛事")
+            series[serie].append(match)
+
+        content = typst_template.list_match
+
+        for serie_name, serie_matches in series.items():
+            content += f'#series_card("{serie_name}", [\n'
+
+            for match in serie_matches:
+                match_json = await cls.parse(match)
+
+                content += (
+                    f'#match_card('
+                    f'"{match_json["slug"]}",'
+                    f'"{match_json["time"]}",'
+                    f'"{match_json["team_a"]}",'
+                    f'{match_json["score_a"]},'
+                    f'{match_json["score_b"]},'
+                    f'"{match_json["team_b"]}",'
+                    f'{match_json["status"]}'
+                    f')\n'
+                )
+
+            content += '])\n\n'
+
+        return content
 
 
 class PandaScoreClient:

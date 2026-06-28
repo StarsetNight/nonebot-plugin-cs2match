@@ -67,24 +67,14 @@ async def on_list_matches(args: Message = CommandArg()):
         "upcoming": panda_client.list_upcoming_matches,
     }
 
-    await list_matches.send(f"正在查询比赛列表，请稍候...")
+    await list_matches.send("正在查询比赛列表，请稍候...")
 
     func = func_map.get(arg, panda_client.list_matches)
     matches = await func()
-    match_content = typst_template.list_match
-    for match in reversed(matches):
-        match_json = await MatchParser.parse(match)
-        match_content += (
-            f"#match_card("
-            f'"{match_json["name"]}",'
-            f'"{match_json["time"]}",'
-            f'"{match_json["team_a"]}",'
-            f"{match_json['score_a']},"
-            f"{match_json['score_b']},"
-            f'"{match_json["team_b"]}",'
-            f"{match_json['status']}"
-            f")\n"
-        )
 
-    await list_matches.finish(await typst_render(match_content))
+    await list_matches.finish(
+        await typst_render(
+            await MatchParser.prerender_list(matches)
+        )
+    )
 

@@ -102,9 +102,9 @@ help_text = """#set text(font: "SimHei")
 list_match = """#set text(font: "SimHei")
 
 #set page(
-  width: 300pt,
+  width: 320pt,
   height: auto,
-  margin: 16pt,
+  margin: 12pt,
 )
 
 #let primary = rgb("#3b82f6")
@@ -139,8 +139,8 @@ list_match = """#set text(font: "SimHei")
 // =====================
 #let tag(label, color) = box(
   fill: color,
-  radius: 3pt,
-  inset: 6pt,
+  radius: 5pt,
+  inset: 4pt,
   text(size: 8pt, fill: white)[#label]
 )
 
@@ -154,7 +154,7 @@ list_match = """#set text(font: "SimHei")
 // =====================
 // 赛事卡片
 // =====================
-#let match_card(title, time, team_a, score_a, score_b, team_b, status) = [
+#let match_card(slug, time, team_a, score_a, score_b, team_b, status) = [
   #box(
     width: 100%,
     stroke: 0.5pt + border,
@@ -171,20 +171,18 @@ list_match = """#set text(font: "SimHei")
         columns: (1fr, auto),
 
         [
+          #v(2pt)
           #text(
             size: 10pt,
-            weight: "bold",
-            fill: rgb("#111827")
-          )[#title]
-        ],
-
-        [
-          #text(
-            size: 9pt,
-            fill: rgb("#929292"),
+            fill: rgb("#363636"),
             weight: "bold"
           )[#time]
-        ]
+        ],
+
+        // =====================
+        // STATUS
+        // =====================
+        [#status],
       )
 
       #v(6pt)
@@ -226,14 +224,40 @@ list_match = """#set text(font: "SimHei")
 
       #v(6pt)
 
-      // =====================
-      // STATUS
-      // =====================
-      #status
+      #text(
+        size: 6pt,
+        fill: rgb("#a7a7a7")
+      )[#slug]
     ]
   )
 
   #v(10pt)
+]
+
+#let series_card(title, body) = [
+  #box(
+    width: 100%,
+    stroke: 0.7pt + rgb("#d1d5db"),
+    radius: 10pt,
+    fill: rgb("#f8fafc"),
+    inset: 10pt,
+
+    [
+      #text(
+        size: 11pt,
+        weight: "bold",
+        fill: primary,
+      )[
+        🏆 #title
+      ]
+
+      #v(8pt)
+
+      #body
+    ]
+  )
+
+  #v(12pt)
 ]
 
 """
