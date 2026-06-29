@@ -13,7 +13,7 @@ from typst import compile
 from nonebot.adapters.onebot.v11 import MessageSegment
 from nonebot import require
 
-require("nonebot-plugin-localstore")
+require("nonebot_plugin_localstore")
 from nonebot_plugin_localstore import get_plugin_cache_file
 
 from . import typst_template

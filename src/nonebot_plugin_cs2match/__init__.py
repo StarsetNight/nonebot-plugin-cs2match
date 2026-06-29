@@ -1,8 +1,7 @@
 # Copyright (c) 2023 StarsetNight
 # SPDX-License-Identifier: MIT
 
-import os
-from dotenv import load_dotenv
+from typing import cast
 
 from nonebot import logger
 from nonebot import get_driver, get_plugin_config
@@ -21,17 +20,7 @@ driver = get_driver()
 global_config = driver.config
 config = get_plugin_config(Config)
 
-load_dotenv()
-
-if PANDASCORE_TOKEN := os.getenv("PANDASCORE_TOKEN"):
-    panda_client = PandaScoreClient(PANDASCORE_TOKEN)
-    available = True
-else:
-    logger.warning("未检测到环境变量 PANDASCORE_TOKEN，CS2 数据查询功能将不可用或受限。")
-    logger.info("请前往 PandaScore 官网注册获取 Token，并在项目根目录 .env 文件中配置："
-                "PANDASCORE_TOKEN=<你的Token>")
-    available = False
-
+panda_client: PandaScoreClient | None = None
 
 # 注册插件
 __plugin_meta__ = PluginMetadata(
@@ -39,10 +28,16 @@ __plugin_meta__ = PluginMetadata(
     description="实时追踪 Counter-Strike 2 职业赛事，开赛自动提醒、关键赛况与大比分异动推送",
     usage=help_text,
     config=Config,
-    extra={
-        "Enabled": available,
-    },
+    extra={}
 )
+
+@driver.on_startup
+async def check_token():
+    global panda_client
+    if config.pandascore_token is None:
+        logger.warning("警告！pandascore_token未配置")
+        return
+    panda_client = PandaScoreClient(config.pandascore_token)
 
 get_help = on_command("cs2help", aliases={"cs2帮助"}, priority=10, block=True)
 list_matches = on_command("matches", aliases={"比赛列表"}, rule=is_enabled, priority=10, block=True)
@@ -61,15 +56,17 @@ async def on_get_help():
 async def on_list_matches(args: Message = CommandArg()):
     arg = args.extract_plain_text().strip()
 
+    client = cast(PandaScoreClient, panda_client)
+
     func_map = {
-        "past": panda_client.list_past_matches,
-        "running": panda_client.list_running_matches,
-        "upcoming": panda_client.list_upcoming_matches,
+        "past": client.list_past_matches,
+        "running": client.list_running_matches,
+        "upcoming": client.list_upcoming_matches,
     }
 
     await list_matches.send("正在查询比赛列表，请稍候...")
 
-    func = func_map.get(arg, panda_client.list_matches)
+    func = func_map.get(arg, client.list_matches)
     matches = await func()
 
     await list_matches.finish(
