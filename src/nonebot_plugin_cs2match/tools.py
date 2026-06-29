@@ -11,12 +11,17 @@ from ayafileio import open
 from typst import compile
 
 from nonebot.adapters.onebot.v11 import MessageSegment
-from nonebot import require
+from nonebot import require, get_driver, get_plugin_config
 
 require("nonebot_plugin_localstore")
 from nonebot_plugin_localstore import get_plugin_cache_file
 
 from . import typst_template
+from .config import Config
+
+driver = get_driver()
+global_config = driver.config
+config = get_plugin_config(Config)
 
 def format_iso(iso: str) -> str:
     try:
@@ -108,9 +113,15 @@ class MatchParser:
             serie = (match.get("serie") or {}).get("full_name", "未知赛事")
             series[serie].append(match)
 
+        sorted_series = dict(sorted(
+            series.items(),
+            key=lambda s: cls.serie_priority(s[0]),
+            reverse=True
+        ))
+
         content = typst_template.list_match
 
-        for serie_name, serie_matches in series.items():
+        for serie_name, serie_matches in sorted_series.items():
             content += f'#series_card("{serie_name}", [\n'
 
             serie_matches.sort(key=lambda x: x["scheduled_at"])
@@ -133,6 +144,31 @@ class MatchParser:
             content += '])\n\n'
 
         return content
+
+    @classmethod
+    def classify_serie(cls, name: str) -> str:
+        if not name:
+            return "other"
+
+        n = name.lower()
+
+        for key, _, keywords in config.serie_rules:
+            if any(k in n for k in keywords):
+                return key
+
+        return "other"
+
+    @classmethod
+    def serie_priority(cls, name: str) -> int:
+        key = cls.classify_serie(name)
+
+        for k, priority, _ in config.serie_rules:
+            if k == key:
+                return priority
+
+        return 0
+
+
 
 
 class PandaScoreClient:
