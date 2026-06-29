@@ -1,7 +1,7 @@
 # Copyright (c) 2023 StarsetNight
 # SPDX-License-Identifier: MIT
 
-help_text = """#set text(font: "SimHei")
+help_text = """#set text(font: ("Consolas", "SimHei"))
 
 #set page(
   width: 400pt,
@@ -21,7 +21,6 @@ help_text = """#set text(font: "SimHei")
   radius: 6pt,
   [
     #text(
-      font: ("Consolas", "SimHei"),
       size: 11pt,
       fill: white,
       weight: "bold"
@@ -50,7 +49,6 @@ help_text = """#set text(font: "SimHei")
         radius: 4pt,
         inset: 8pt,
         text(
-          font: ("Consolas", "SimHei"),
           size: 9pt,
           fill: primary
         )[
@@ -99,7 +97,7 @@ help_text = """#set text(font: "SimHei")
 )
 """
 
-list_match = """#set text(font: "SimHei")
+list_match = """#set text(font: ("Consolas", "SimHei"))
 
 #set page(
   width: 320pt,
@@ -121,7 +119,6 @@ list_match = """#set text(font: "SimHei")
   radius: 6pt,
   [
     #text(
-      font: ("Consolas", "SimHei"),
       size: 11pt,
       fill: white,
       weight: "bold"

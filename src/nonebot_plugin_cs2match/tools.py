@@ -84,7 +84,7 @@ class MatchParser:
     async def prerender_list(cls, matches):
         series = defaultdict(list)
 
-        for match in reversed(matches):
+        for match in matches:
             serie = (match.get("serie") or {}).get("full_name", "未知赛事")
             series[serie].append(match)
 
@@ -92,6 +92,8 @@ class MatchParser:
 
         for serie_name, serie_matches in series.items():
             content += f'#series_card("{serie_name}", [\n'
+
+            serie_matches.sort(key=lambda x: x["scheduled_at"])
 
             for match in serie_matches:
                 match_json = await cls.parse(match)
