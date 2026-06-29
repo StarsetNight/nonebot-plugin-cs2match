@@ -1,14 +1,20 @@
 # Copyright (c) 2023 StarsetNight
 # SPDX-License-Identifier: MIT
 
-import aiohttp
-import typst
-from io import BytesIO
 from typing import Any
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
+from hashlib import blake2b
+
+from aiohttp import ClientSession
+from ayafileio import open
+from typst import compile
 
 from nonebot.adapters.onebot.v11 import MessageSegment
+from nonebot import require
+
+require("nonebot-plugin-localstore")
+from nonebot_plugin_localstore import get_plugin_cache_file
 
 from . import typst_template
 
@@ -29,9 +35,23 @@ def format_iso(iso: str) -> str:
         return "时间未知"
 
 
-async def typst_render(typst_content: str) -> MessageSegment.image:
-    # TODO 缓存处理
-    return MessageSegment.image(BytesIO(typst.compile(typst_content.encode(), format="png", ppi=144.0)))
+async def typst_render(typst_content: str) -> MessageSegment:
+    cache_index = blake2b(typst_content.encode("utf-8"))
+
+    cache_file_path = get_plugin_cache_file(f"{cache_index.hexdigest()}.png")
+
+    if cache_file_path.exists():
+        cache_file = open(cache_file_path, "rb")
+        cache_data = await cache_file.readall()
+        await cache_file.close()
+        return MessageSegment.image(cache_data)
+
+    file_data = compile(typst_content.encode(), format="png", ppi=144.0)
+    cache_file = open(cache_file_path, "wb")
+    await cache_file.write(file_data)
+    await cache_file.close()
+
+    return MessageSegment.image(file_data)
 
 
 class MatchParser:
@@ -121,11 +141,11 @@ class PandaScoreClient:
         self.headers = {
             "Authorization": f"Bearer {token}"
         }
-        self.session: aiohttp.ClientSession | None = None
+        self.session: ClientSession | None = None
 
     async def _get(self, path, params=None) -> Any:
         if not self.session:
-            self.session = aiohttp.ClientSession()
+            self.session = ClientSession()
         url = f"{self.base}{path}"
         async with self.session.get(url, headers=self.headers, params=params) as resp:
             return await resp.json()
