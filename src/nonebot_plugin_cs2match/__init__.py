@@ -3,10 +3,8 @@
 
 from typing import cast
 
-from nonebot import logger
-from nonebot import get_driver, get_plugin_config
-from nonebot import on_command
-from nonebot.adapters.onebot.v11 import Message, MessageSegment, GROUP_ADMIN, GROUP_OWNER
+from nonebot import logger, get_driver, get_plugin_config, on_command
+from nonebot.adapters.onebot.v11 import Message, GROUP_ADMIN, GROUP_OWNER
 from nonebot.params import CommandArg
 from nonebot.permission import SUPERUSER
 from nonebot.plugin import PluginMetadata
