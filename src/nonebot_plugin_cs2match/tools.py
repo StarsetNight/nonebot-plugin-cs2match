@@ -4,7 +4,7 @@
 from typing import Any
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
-from hashlib import blake2b
+from binascii import crc32
 
 from aiohttp import ClientSession
 from ayafileio import open
@@ -36,9 +36,9 @@ def format_iso(iso: str) -> str:
 
 
 async def typst_render(typst_content: str) -> MessageSegment:
-    cache_index = blake2b(typst_content.encode("utf-8"))
+    cache_index = crc32(typst_content.encode("utf-8"))
 
-    cache_file_path = get_plugin_cache_file(f"{cache_index.hexdigest()}.png")
+    cache_file_path = get_plugin_cache_file(f"{cache_index:08X}.png")
 
     if cache_file_path.exists():
         cache_file = open(cache_file_path, "rb")
