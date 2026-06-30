@@ -1,22 +1,24 @@
 # Copyright (c) 2023 StarsetNight
 # SPDX-License-Identifier: MIT
-
-from typing import Any
+from asyncio import to_thread
+from typing import Any, cast
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from binascii import crc32
 
 from aiohttp import ClientSession
 from ayafileio import open
-from typst import compile
+import typst
 
 from nonebot.adapters.onebot.v11 import MessageSegment
 from nonebot import require
 
 require("nonebot_plugin_localstore")
-from nonebot_plugin_localstore import get_plugin_cache_file
+from nonebot_plugin_localstore import get_plugin_cache_dir
 
 from . import typst_template
+
+RENDER_CACHE_DIR = get_plugin_cache_dir() / "render_cache"
 
 def format_iso(iso: str) -> str:
     try:
@@ -38,7 +40,7 @@ def format_iso(iso: str) -> str:
 async def typst_render(typst_content: str) -> MessageSegment:
     cache_index = crc32(typst_content.encode("utf-8"))
 
-    cache_file_path = get_plugin_cache_file(f"{cache_index:08X}.png")
+    cache_file_path = RENDER_CACHE_DIR / f"{cache_index:08X}.png"
 
     if cache_file_path.exists():
         cache_file = open(cache_file_path, "rb")
@@ -46,13 +48,16 @@ async def typst_render(typst_content: str) -> MessageSegment:
         await cache_file.close()
         return MessageSegment.image(cache_data)
 
-    file_data = compile(typst_content.encode(), format="png", ppi=144.0)
+    file_data = await to_thread(_typst_render, typst_content)
     cache_file = open(cache_file_path, "wb")
     await cache_file.write(file_data)
     await cache_file.close()
 
     return MessageSegment.image(file_data)
 
+async def _typst_render(typst_content: str) -> bytes:
+    # 一般来说是不会输出多页的，所以干脆写个cast哄一下检查器了
+    return cast(bytes, typst.compile(typst_content.encode(), format="png", ppi=144.0))
 
 class MatchParser:
     @staticmethod
