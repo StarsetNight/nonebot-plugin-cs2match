@@ -32,18 +32,27 @@ __plugin_meta__ = PluginMetadata(
 )
 
 @driver.on_startup
-async def check_token():
+async def on_startup_check():
     global panda_client
     if config.pandascore_token is None:
-        logger.warning("警告！pandascore_token未配置")
+        logger.warning("pandascore_token未设置，CS2数据查询功能将不可用或受限。")
+        logger.info("请前往PandaScore官网注册获取Token，并在插件目录config.py中配置："
+                    "pandascore_token: str | None = <你的Token>")
         return
     panda_client = PandaScoreClient(config.pandascore_token)
+
+    if config.priority_mode not in {"whitelist_only", "whitelist_first"}:
+        logger.warning(f"未知的priority_mode配置项：{config.priority_mode}，将使用默认值whitelist_only（仅渲染serie_rules）。")
+        config.priority_mode = "whitelist_only"
+
 
 get_help = on_command("cs2help", aliases={"cs2帮助"}, priority=10, block=True)
 list_matches = on_command("matches", aliases={"比赛列表"}, rule=is_enabled, priority=10, block=True)
 check_match = on_command("match", aliases={"比分"}, rule=is_enabled, priority=10, block=True)
 check_team = on_command("team", aliases={"查战队"}, rule=is_enabled, priority=10, block=True)
 monitor_match = on_command("monitor", aliases={"监视"}, rule=is_enabled,
+                           permission=SUPERUSER | GROUP_OWNER | GROUP_ADMIN, priority=10, block=True)
+whitelist_config = on_command("cs2whitelist", aliases={"白名单"}, rule=is_enabled,
                            permission=SUPERUSER | GROUP_OWNER | GROUP_ADMIN, priority=10, block=True)
 
 
@@ -74,4 +83,16 @@ async def on_list_matches(args: Message = CommandArg()):
             await MatchParser.prerender_list(matches)
         )
     )
+
+
+# FIXME 现在不能做到运行时修改配置，这个函数实际上是无效的，需要配套的配置系统，兴许是数据库吧
+@whitelist_config.handle()
+async def on_whitelist_config(args: Message = CommandArg()):
+    arg = args.extract_plain_text().strip().lower()
+    if arg not in ["on", "off"]:
+        await whitelist_config.finish("命令用法：whitelist <on/off>")
+    config.priority_mode = "whitelist_only" if arg == "on" else "whitelist_first"
+    await whitelist_config.send(config.priority_mode)
+    await whitelist_config.finish(f"仅白名单赛事模式被设置为{'开启' if arg == 'on' else '关闭'}。")
+
 

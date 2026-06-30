@@ -111,6 +111,11 @@ class MatchParser:
 
         for match in matches:
             serie = (match.get("serie") or {}).get("full_name", "未知赛事")
+            if (
+                config.priority_mode == "whitelist_only"
+                and cls.serie_priority(serie) == 0
+            ):
+                continue
             series[serie].append(match)
 
         sorted_series = dict(sorted(

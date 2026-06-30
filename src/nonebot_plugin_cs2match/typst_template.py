@@ -81,18 +81,23 @@ help_text = """#set text(font: ("Consolas", "SimHei"))
   ),
 
   card(
-    "match <id> / 比分 <id>",
+    "match <id> / 比分",
     "查看比赛大比分详情。"
   ),
 
   card(
-    "team <id> / 查战队 <id>",
+    "team <id> / 查战队",
     "查看战队信息。"
   ),
 
   card(
-    "monitor <id> / 监视 <id>",
+    "monitor <id> / 监视",
     "监视比赛开始、比分变动、结束。"
+  ),
+  
+  card(
+    "cs2whitelist <on/off> / 白名单",
+    "设置比赛列表是否仅显示白名单赛事系列。"
   ),
 )
 """
