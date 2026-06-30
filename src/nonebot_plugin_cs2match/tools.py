@@ -15,10 +15,18 @@ from nonebot import require
 
 require("nonebot_plugin_localstore")
 from nonebot_plugin_localstore import get_plugin_cache_dir
+require("nonebot_plugin_apscheduler")
+from nonebot_plugin_apscheduler import scheduler
 
 from . import typst_template
 
 RENDER_CACHE_DIR = get_plugin_cache_dir() / "render_cache"
+
+@scheduler.scheduled_job('cron', day_of_week='mon-fri', hour=8, minute=0)
+async def _():
+    for i in RENDER_CACHE_DIR.rglob("*.png"):
+        i.unlink()
+
 
 def format_iso(iso: str) -> str:
     try:
