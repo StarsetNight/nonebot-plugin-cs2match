@@ -1,5 +1,7 @@
 # Copyright (c) 2023 StarsetNight
 # SPDX-License-Identifier: MIT
+from asyncio import create_task
+from functools import wraps
 from asyncio import to_thread
 from typing import Any, cast
 from datetime import datetime, timezone, timedelta
@@ -11,7 +13,7 @@ from ayafileio import open
 import typst
 
 from nonebot.adapters.onebot.v11 import MessageSegment
-from nonebot import require, get_driver, get_plugin_config
+from nonebot import require, get_driver, get_plugin_config, logger
 
 require("nonebot_plugin_localstore")
 from nonebot_plugin_localstore import get_plugin_cache_dir
@@ -33,6 +35,23 @@ async def _():
     for i in RENDER_CACHE_DIR.rglob("*.png"):
         i.unlink()
 
+def func_cache(func):
+    tasks = {}
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        key = (args, tuple(sorted(kwargs.items())))
+        if key in tasks:
+            return await tasks[key]
+        task = create_task(func(*args, **kwargs))
+        tasks[key] = task
+        try:
+            result = await task
+            return result
+        finally:
+            tasks.pop(key, None)
+    return wrapper
+
+
 
 def format_iso(iso: str) -> str:
     try:
@@ -50,7 +69,7 @@ def format_iso(iso: str) -> str:
     except ValueError:
         return "时间未知"
 
-
+@func_cache
 async def typst_render(typst_content: str) -> MessageSegment:
     cache_index = crc32(typst_content.encode("utf-8"))
 
@@ -199,6 +218,7 @@ class PandaScoreClient:
         }
         self.session: ClientSession | None = None
 
+    @func_cache
     async def _get(self, path, params=None) -> Any:
         if not self.session:
             self.session = ClientSession()
