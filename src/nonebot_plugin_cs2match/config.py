@@ -13,9 +13,8 @@ class Config(BaseModel):
         ("iem", 80, ["iem"]),
         ("esl", 80, ["esl"]),
         ("pgl", 70, ["pgl"]),
-        ("xpl", 60, ["xpl"]),
-        ("cac", 50, ["cac"]),
-        ("pnl", 40, ["pnl"]),
+        ("cac", 60, ["cac"]),
+        ("pnl", 50, ["pnl"]),
     ]  # 赛事系列，优先级，匹配赛事名称（小写）
     priority_mode: str = "whitelist_only"  # whitelist_only 仅渲染serie_rules | whitelist_first serie_rules优先渲染
     # TODO priority_mode想要支持运行时修改并可覆写，应该得另建数据存储
