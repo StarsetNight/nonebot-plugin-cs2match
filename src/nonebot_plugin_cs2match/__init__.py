@@ -78,7 +78,7 @@ async def on_list_matches(args: Message = CommandArg()):
 
     await list_matches.finish(
         await typst_render(
-            await MatchParser.prerender_list(matches)
+            MatchParser.prerender_list(matches)
         )
     )
 

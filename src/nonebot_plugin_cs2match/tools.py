@@ -95,7 +95,7 @@ def _typst_render(typst_content: str) -> bytes:
 
 class MatchParser:
     @staticmethod
-    async def parse(match: dict[str, Any]) -> dict[str, Any]:
+    def parse(match: dict[str, Any]) -> dict[str, Any]:
         # 基础信息
         serie = match.get("serie", {}).get("full_name", "Unknown Match")
         slug = match.get("slug", "unknown")
@@ -140,7 +140,7 @@ class MatchParser:
         }
 
     @classmethod
-    async def prerender_list(cls, matches):
+    def prerender_list(cls, matches):
         series = defaultdict(list)
 
         for match in matches:
@@ -166,7 +166,7 @@ class MatchParser:
             serie_matches.sort(key=lambda x: x["scheduled_at"])
 
             for match in serie_matches:
-                match_json = await cls.parse(match)
+                match_json = cls.parse(match)
 
                 content += (
                     f'#match_card('
