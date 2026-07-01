@@ -26,6 +26,7 @@ global_config = driver.config
 config = get_plugin_config(Config)
 
 RENDER_CACHE_DIR = get_plugin_cache_dir() / "render_cache"
+RENDER_CACHE_DIR.mkdir(exist_ok=True)
 
 @scheduler.scheduled_job('cron', day_of_week='mon-fri', hour=8, minute=0)
 async def _():
@@ -68,8 +69,9 @@ async def typst_render(typst_content: str) -> MessageSegment:
 
     return MessageSegment.image(file_data)
 
-async def _typst_render(typst_content: str) -> bytes:
+def _typst_render(typst_content: str) -> bytes:
     # 一般来说是不会输出多页的，所以干脆写个cast哄一下检查器了
+    # pyrefly: ignore [redundant-cast]
     return cast(bytes, typst.compile(typst_content.encode(), format="png", ppi=144.0))
 
 class MatchParser:
