@@ -13,17 +13,17 @@ from .config import Config
 from .tools import PandaScoreClient, MatchParser, typst_render
 from .typst_template import help_text
 from .rule import is_enabled
-from .configure import Configure, PriorityMode
+from .dynamic_config import DynamicConfigSystem, PriorityMode
 
 require("nonebot_plugin_localstore")
 from nonebot_plugin_localstore import get_plugin_data_file
 
 driver = get_driver()
 global_config = driver.config
-config = get_plugin_config(Config)
+config = get_plugin_config(Config)  # 取自config.py中的静态配置
 
 panda_client: PandaScoreClient | None = None
-plugin_config: Configure | None = None
+dynamic_config: DynamicConfigSystem | None = None  # 取自插件内编写的DynamicConfigSystem
 
 # 注册插件
 __plugin_meta__ = PluginMetadata(
@@ -36,7 +36,7 @@ __plugin_meta__ = PluginMetadata(
 
 @driver.on_startup
 async def on_startup_check():
-    global panda_client, plugin_config
+    global panda_client, dynamic_config
     if config.pandascore_token is None:
         logger.warning("pandascore_token未设置，CS2数据查询功能将不可用或受限。")
         logger.info("请前往PandaScore官网注册获取Token，并在插件目录config.py中配置："
@@ -46,9 +46,9 @@ async def on_startup_check():
 
     config_path = get_plugin_data_file("config.json")
     if not config_path.exists():
-        plugin_config = await Configure.new(config_path)
+        dynamic_config = await DynamicConfigSystem.new(config_path)
     else:
-        plugin_config = await Configure.from_path(config_path)
+        dynamic_config = await DynamicConfigSystem.from_path(config_path)
 
 
 get_help = on_command("cs2help", aliases={"cs2帮助"}, priority=10, block=True)
@@ -82,7 +82,7 @@ async def on_list_matches(args: Message = CommandArg()):
 
     func = func_map.get(arg, client.list_matches)
     matches = await func()
-    _config = cast(Configure, plugin_config)
+    _config = cast(DynamicConfigSystem, dynamic_config)
 
     await list_matches.finish(
         await typst_render(
@@ -96,9 +96,8 @@ async def on_whitelist_config(args: Message = CommandArg()):
     arg = args.extract_plain_text().strip().lower()
     if arg not in ["on", "off"]:
         await whitelist_config.finish("命令用法：whitelist <on/off>")
-    _config = cast(Configure, config)
+    _config = cast(DynamicConfigSystem, dynamic_config)
     _config.config.priority_mode = PriorityMode.WhitelistOnly if arg == "on" else PriorityMode.WhitelistFirst
-    await whitelist_config.send(_config.config.priority_mode)
     await whitelist_config.finish(f"仅白名单赛事模式被设置为{'开启' if arg == 'on' else '关闭'}。")
 
 

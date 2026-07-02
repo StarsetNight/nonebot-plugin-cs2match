@@ -146,7 +146,7 @@ class MatchParser:
         for match in matches:
             serie = (match.get("serie") or {}).get("full_name", "未知赛事")
             if (
-                priority_mode == "whitelist_only"
+                priority_mode == "whitelist-only"
                 and cls.serie_priority(serie) == 0
             ):
                 continue

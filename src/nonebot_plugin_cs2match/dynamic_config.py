@@ -9,27 +9,27 @@ class PriorityMode(str, Enum):
     WhitelistOnly = "whitelist-only"
     WhitelistFirst = "whitelist-first"
 
-class InProcessConfigure(BaseModel):
+class DynamicConfig(BaseModel):
     priority_mode: PriorityMode = PriorityMode.WhitelistOnly
 
-class Configure:
-    def __init__(self, config: InProcessConfigure, path: Path):
+class DynamicConfigSystem:
+    def __init__(self, config: DynamicConfig, path: Path):
         self.config = config
         self.path = path
 
     @classmethod
-    async def from_path(cls, path: Path) -> Configure:
+    async def from_path(cls, path: Path) -> DynamicConfigSystem:
         async with ayafileio.open(path, "r", encoding="utf-8") as f:
             data = await f.readall()
-        config = InProcessConfigure.model_validate_json(data)
-        return Configure(config, path)
+        config = DynamicConfig.model_validate_json(data)
+        return DynamicConfigSystem(config, path)
 
     @classmethod
-    async def new(cls, path: Path) -> Configure:
-        config = InProcessConfigure()
+    async def new(cls, path: Path) -> DynamicConfigSystem:
+        config = DynamicConfig()
         async with ayafileio.open(path, "w", encoding="utf-8") as f:
             await f.write(config.model_dump_json())
-        return Configure(config, path)
+        return DynamicConfigSystem(config, path)
 
     async def save(self):
         async with ayafileio.open(self.path, "w", encoding="utf-8") as f:
