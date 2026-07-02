@@ -1,15 +1,15 @@
 # nonebot-plugin-cs2match
 
-_✨ CS2赛事查询助手 ✨_
+_✨ CS2赛事查询 ✨_
 
 
 <a href="./LICENSE">
-    <img src="https://img.shields.io/github/license/owner/nonebot-plugin-cs2match.svg" alt="license">
+    <img src="https://img.shields.io/github/license/StarsetNight/nonebot-plugin-cs2match.svg" alt="license">
 </a>
 <a href="https://pypi.python.org/pypi/nonebot-plugin-cs2match">
     <img src="https://img.shields.io/pypi/v/nonebot-plugin-cs2match.svg" alt="pypi">
 </a>
-<img src="https://img.shields.io/badge/python-3.9+-blue.svg" alt="python">
+<img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="python">
 
 ## 📖 介绍
 
@@ -64,7 +64,8 @@ _✨ CS2赛事查询助手 ✨_
 |:----------------:|:--:|:--------------:|:---------------------------------------------------:|
 | pandascore_token | 是  |       无        |                PandaScore提供商获取的Token                |
 |   serie_rules    | 是  |      见文件       |              按照优先级给赛事系列排序（同时也是赛事系列白名单）              |
-|  priority_mode   | 是  | whitelist_only | `whitelist_only`仅渲染白名单<br/>`whitelist_first`优先渲染白名单 |
+
+部分运行时配置（DynamicConfig）仅开放运行时修改，详情查阅[指令表](#指令表)
 
 ## 🎉 使用
 ### 指令表
