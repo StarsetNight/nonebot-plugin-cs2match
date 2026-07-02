@@ -3,7 +3,7 @@
 from asyncio import create_task
 from functools import wraps
 from asyncio import to_thread
-from typing import Any, cast
+from typing import Any, cast, Callable
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from binascii import crc32
@@ -140,13 +140,13 @@ class MatchParser:
         }
 
     @classmethod
-    def prerender_list(cls, matches):
+    def prerender_list(cls, matches: list[dict[str, Any]], priority_mode: str) -> str:
         series = defaultdict(list)
 
         for match in matches:
             serie = (match.get("serie") or {}).get("full_name", "未知赛事")
             if (
-                config.priority_mode == "whitelist_only"
+                priority_mode == "whitelist-only"
                 and cls.serie_priority(serie) == 0
             ):
                 continue
