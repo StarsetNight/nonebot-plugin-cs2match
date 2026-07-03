@@ -7,7 +7,7 @@ from functools import wraps
 from asyncio import to_thread
 from typing import Any, cast, Callable
 from datetime import datetime, timezone, timedelta
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from binascii import crc32
 from time import time
 
@@ -57,25 +57,37 @@ def async_dedupe(func: AsyncFunc[P, T]) -> AsyncFunc[P, T]:
     return wrapper
 
 CACHE_TTL = config.cache_ttl
+MAXSIZE = config.cache_max_size
 
-def func_ttl_cache(func):
-    ttl = 0.0
-    data: Any = None
+def func_ttl_cache(maxsize: int) -> Callable[[AsyncFunc[P, T]], AsyncFunc[P, T]]:
+    def _func_ttl_cache(func: AsyncFunc[P, T]) -> AsyncFunc[P, T]:
+        cache: OrderedDict[int, tuple[float, Any]] = OrderedDict()
+        maxsize_ = maxsize
 
-    @wraps(func)
-    async def wrapper(*args, **kwargs) -> T:
-        nonlocal ttl, data
-        now = time()
-        if ttl <= now:
-            ttl = now + CACHE_TTL
+        @wraps(func)
+        async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+            nonlocal cache
+            key = hash((args, tuple(sorted(kwargs.items()))))
+            now = time()
+
+            if key in cache:
+                ttl, data = cache[key]
+                if ttl > now:
+                    cache.move_to_end(key)
+                    return data
+                del cache[key]
+
             data = await func(*args, **kwargs)
-            return data
-        else:
-            logger.debug("临时缓存命中！")
+            cache[key] = (now + CACHE_TTL, data)
+
+            while len(cache) > maxsize_:
+                cache.popitem(last=False)
+
             return data
 
-    return wrapper
+        return wrapper
 
+    return _func_ttl_cache
 
 
 def format_iso(iso: str) -> str:
@@ -255,7 +267,7 @@ class PandaScoreClient:
             return await resp.json()
 
     @async_dedupe
-    @func_ttl_cache
+    @func_ttl_cache(MAXSIZE)
     async def list_matches(self) -> list[dict[str, Any]]:
         return [
             m for m in await self._get("/matches")
@@ -263,7 +275,7 @@ class PandaScoreClient:
         ]
 
     @async_dedupe
-    @func_ttl_cache
+    @func_ttl_cache(MAXSIZE)
     async def list_past_matches(self) -> list[dict[str, Any]]:
         return [
             m for m in await self._get("/matches/past")
@@ -271,7 +283,7 @@ class PandaScoreClient:
         ]
 
     @async_dedupe
-    @func_ttl_cache
+    @func_ttl_cache(MAXSIZE)
     async def list_running_matches(self) -> list[dict[str, Any]]:
         return [
             m for m in await self._get("/matches/running")
@@ -279,16 +291,20 @@ class PandaScoreClient:
         ]
 
     @async_dedupe
-    @func_ttl_cache
+    @func_ttl_cache(MAXSIZE)
     async def list_upcoming_matches(self) -> list[dict[str, Any]]:
         return [
             m for m in await self._get("/matches/upcoming")
             if m.get("videogame", {}).get("id") == 3
         ]
 
+    @async_dedupe
+    @func_ttl_cache(MAXSIZE)
     async def get_match(self, match_id: str) -> dict[str, Any]:
         return await self._get(f"/matches/{match_id}")
 
+    @async_dedupe
+    @func_ttl_cache(MAXSIZE)
     async def get_match_score(self, match_id: str) -> dict[str, int] | None:
         match = await self.get_match(match_id)
 
@@ -309,6 +325,8 @@ class PandaScoreClient:
 
         return score
 
+    @async_dedupe
+    @func_ttl_cache(MAXSIZE)
     async def get_teams(self, match_id: str) -> list[dict[str, Any]]:
         match = await self.get_match(match_id)
 
