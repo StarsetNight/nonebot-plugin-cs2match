@@ -1,12 +1,15 @@
 # Copyright (c) 2023 StarsetNight
 # SPDX-License-Identifier: MIT
-from asyncio import create_task
+from typing import Coroutine
+from typing import ParamSpec, TypeVar
+from asyncio import create_task, Task
 from functools import wraps
 from asyncio import to_thread
 from typing import Any, cast, Callable
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from binascii import crc32
+from time import time
 
 from aiohttp import ClientSession
 from ayafileio import open
@@ -30,17 +33,19 @@ config = get_plugin_config(Config)
 RENDER_CACHE_DIR = get_plugin_cache_dir() / "render_cache"
 RENDER_CACHE_DIR.mkdir(exist_ok=True)
 
-@scheduler.scheduled_job('cron', day_of_week='mon-fri', hour=8, minute=0)
-async def _():
-    for i in RENDER_CACHE_DIR.rglob("*.png"):
-        i.unlink()
+P = ParamSpec("P")
+T = TypeVar("T")
+AsyncFunc = Callable[P, Coroutine[Any, Any, T]]
 
-def func_cache(func):
-    tasks = {}
+def async_dedupe(func: AsyncFunc[P, T]) -> AsyncFunc[P, T]:
+    tasks: dict[int, Task[T]] = {}
     @wraps(func)
-    async def wrapper(*args, **kwargs):
-        key = (args, tuple(sorted(kwargs.items())))
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        nonlocal tasks
+        key = hash((args, tuple(sorted(kwargs.items()))))
+        print(tasks)
         if key in tasks:
+            logger.debug(f"去重命中，任务状态: {tasks[key]._state}")
             return await tasks[key]
         task = create_task(func(*args, **kwargs))
         tasks[key] = task
@@ -49,6 +54,26 @@ def func_cache(func):
             return result
         finally:
             tasks.pop(key, None)
+    return wrapper
+
+CACHE_TTL = config.cache_ttl
+
+def func_ttl_cache(func):
+    ttl = 0.0
+    data: Any = None
+
+    @wraps(func)
+    async def wrapper(*args, **kwargs) -> T:
+        nonlocal ttl, data
+        now = time()
+        if ttl <= now:
+            ttl = now + CACHE_TTL
+            data = await func(*args, **kwargs)
+            return data
+        else:
+            logger.debug("临时缓存命中！")
+            return data
+
     return wrapper
 
 
@@ -69,17 +94,21 @@ def format_iso(iso: str) -> str:
     except ValueError:
         return "时间未知"
 
-@func_cache
-async def typst_render(typst_content: str) -> MessageSegment:
+@async_dedupe
+async def typst_render(typst_content: str, cache_key: str) -> MessageSegment:
     cache_index = crc32(typst_content.encode("utf-8"))
 
-    cache_file_path = RENDER_CACHE_DIR / f"{cache_index:08X}.png"
+    cache_file_path = RENDER_CACHE_DIR / f"{cache_key}_{cache_index:08X}.png"
 
     if cache_file_path.exists():
         cache_file = open(cache_file_path, "rb")
         cache_data = await cache_file.readall()
         await cache_file.close()
         return MessageSegment.image(cache_data)
+
+    # 清理死缓存
+    for i in RENDER_CACHE_DIR.rglob(f"{cache_key}_*.png"):
+        i.unlink()
 
     file_data = await to_thread(_typst_render, typst_content)
     cache_file = open(cache_file_path, "wb")
@@ -218,7 +247,6 @@ class PandaScoreClient:
         }
         self.session: ClientSession | None = None
 
-    @func_cache
     async def _get(self, path, params=None) -> Any:
         if not self.session:
             self.session = ClientSession()
@@ -226,24 +254,32 @@ class PandaScoreClient:
         async with self.session.get(url, headers=self.headers, params=params) as resp:
             return await resp.json()
 
+    @async_dedupe
+    @func_ttl_cache
     async def list_matches(self) -> list[dict[str, Any]]:
         return [
             m for m in await self._get("/matches")
             if m.get("videogame", {}).get("id") == 3
         ]
 
+    @async_dedupe
+    @func_ttl_cache
     async def list_past_matches(self) -> list[dict[str, Any]]:
         return [
             m for m in await self._get("/matches/past")
             if m.get("videogame", {}).get("id") == 3
         ]
 
+    @async_dedupe
+    @func_ttl_cache
     async def list_running_matches(self) -> list[dict[str, Any]]:
         return [
             m for m in await self._get("/matches/running")
             if m.get("videogame", {}).get("id") == 3
         ]
 
+    @async_dedupe
+    @func_ttl_cache
     async def list_upcoming_matches(self) -> list[dict[str, Any]]:
         return [
             m for m in await self._get("/matches/upcoming")

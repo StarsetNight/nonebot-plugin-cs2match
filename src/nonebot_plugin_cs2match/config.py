@@ -16,3 +16,4 @@ class Config(BaseModel):
         ("cac", 60, ["cac"]),
         ("pnl", 50, ["pnl"]),
     ]  # 赛事系列，优先级，匹配赛事名称（小写）
+    cache_ttl: int = 60

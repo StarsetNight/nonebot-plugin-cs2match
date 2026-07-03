@@ -63,7 +63,7 @@ whitelist_config = on_command("cs2whitelist", aliases={"白名单"}, rule=is_ena
 
 @get_help.handle()
 async def on_get_help():
-    await get_help.finish(await typst_render(help_text))
+    await get_help.finish(await typst_render(help_text, "help"))
 
 
 @list_matches.handle()
@@ -80,13 +80,21 @@ async def on_list_matches(args: Message = CommandArg()):
 
     await list_matches.send("正在查询比赛列表，请稍候...")
 
-    func = func_map.get(arg, client.list_matches)
+    func = func_map.get(arg, None)
+
+    if func is None:
+        func = client.list_matches
+        cache_key = "list_matches"
+    else:
+        cache_key = arg
+
     matches = await func()
     _config = cast(DynamicConfigSystem, dynamic_config)
 
     await list_matches.finish(
         await typst_render(
-            MatchParser.prerender_list(matches, _config.config.priority_mode)
+            MatchParser.prerender_list(matches, _config.config.priority_mode),
+            cache_key
         )
     )
 
@@ -98,6 +106,7 @@ async def on_whitelist_config(args: Message = CommandArg()):
         await whitelist_config.finish("命令用法：whitelist <on/off>")
     _config = cast(DynamicConfigSystem, dynamic_config)
     _config.config.priority_mode = PriorityMode.WhitelistOnly if arg == "on" else PriorityMode.WhitelistFirst
+    await _config.save()
     await whitelist_config.finish(f"仅白名单赛事模式被设置为{'开启' if arg == 'on' else '关闭'}。")
 
 
