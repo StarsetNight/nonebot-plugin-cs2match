@@ -20,8 +20,6 @@ from nonebot import require, get_driver, get_plugin_config, logger
 
 require("nonebot_plugin_localstore")
 from nonebot_plugin_localstore import get_plugin_cache_dir
-require("nonebot_plugin_apscheduler")
-from nonebot_plugin_apscheduler import scheduler
 
 from . import typst_template
 from .config import Config
