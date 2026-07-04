@@ -17,3 +17,4 @@ class Config(BaseModel):
         ("pnl", 50, ["pnl"]),
     ]  # 赛事系列，优先级，匹配赛事名称（小写）
     cache_ttl: int = 60
+    cache_max_size: int = 64
