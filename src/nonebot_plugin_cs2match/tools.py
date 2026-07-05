@@ -43,7 +43,6 @@ def async_dedupe(func: AsyncFunc[P, T]) -> AsyncFunc[P, T]:
         key = hash((args, tuple(sorted(kwargs.items()))))
         print(tasks)
         if key in tasks:
-            logger.debug(f"去重命中，任务状态: {tasks[key]._state}")
             return await tasks[key]
         task = create_task(func(*args, **kwargs))
         tasks[key] = task
