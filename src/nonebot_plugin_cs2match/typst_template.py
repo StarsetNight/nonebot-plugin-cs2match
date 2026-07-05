@@ -86,11 +86,6 @@ help_text = """#set text(font: ("Consolas", "SimHei"))
   ),
 
   card(
-    "team <id> / 查战队",
-    "查看战队信息。"
-  ),
-
-  card(
     "monitor <id> / 监视",
     "监视比赛开始、比分变动、结束。"
   ),

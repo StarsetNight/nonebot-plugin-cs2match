@@ -76,6 +76,5 @@ _✨ CS2赛事查询 ✨_
 |        `cs2help` / `cs2帮助`        |     所有人      |  否  | 任何 |                  获取插件命令用法                   |
 | `matches [past/running/upcoming]` |     所有人      |  否  | 任何 |         比赛列表获取。`matches`可用`比赛列表`代替。         |
 |           `match <id>`            |     所有人      |  否  | 任何 |          比赛大比分获取。`match`可用`比分`代替。           |
-|            `team <id>`            |     所有人      |  否  | 任何 |           战队信息获取。`team`可用`查战队`代替。           |
 |          `monitor <id>`           | 群管/SUPERUSER |  否  | 群聊 |     监视比赛开始、大比分变动、结束。`monitor`可用`监视`代替。      |
 |      `cs2whitelist <on/off>`      | 群管/SUPERUSER |  否  | 任何 | 设置比赛列表是否仅显示白名单赛事系列。`cs2whitelist`可用`白名单`代替。 |

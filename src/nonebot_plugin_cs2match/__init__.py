@@ -54,7 +54,6 @@ async def on_startup_check():
 get_help = on_command("cs2help", aliases={"cs2帮助"}, priority=10, block=True)
 list_matches = on_command("matches", aliases={"比赛列表"}, rule=is_enabled, priority=10, block=True)
 check_match = on_command("match", aliases={"比分"}, rule=is_enabled, priority=10, block=True)
-check_team = on_command("team", aliases={"查战队"}, rule=is_enabled, priority=10, block=True)
 monitor_match = on_command("monitor", aliases={"监视"}, rule=is_enabled,
                            permission=SUPERUSER | GROUP_OWNER | GROUP_ADMIN, priority=10, block=True)
 whitelist_config = on_command("cs2whitelist", aliases={"白名单"}, rule=is_enabled,
