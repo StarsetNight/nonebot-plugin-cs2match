@@ -1,13 +1,13 @@
 # Copyright (c) 2026 StarsetNight, XuanRikka
 # SPDX-License-Identifier: MIT
 
+from __future__ import annotations
 from typing import Coroutine
 from typing import ParamSpec, TypeVar
-from asyncio import create_task, Task
+from asyncio import create_task, Task, to_thread, sleep
 from functools import wraps
-from asyncio import to_thread
 from typing import Any, cast, Callable
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from collections import defaultdict, OrderedDict
 from binascii import crc32
 from time import time
@@ -16,8 +16,8 @@ from aiohttp import ClientSession
 from ayafileio import open
 import typst
 
-from nonebot.adapters.onebot.v11 import MessageSegment
-from nonebot import require, get_driver, get_plugin_config
+from nonebot.adapters.onebot.v11 import MessageSegment, Bot
+from nonebot import require, get_driver, get_plugin_config, logger
 
 require("nonebot_plugin_localstore")
 from nonebot_plugin_localstore import get_plugin_cache_dir
@@ -42,7 +42,6 @@ def async_dedupe(func: AsyncFunc[P, T]) -> AsyncFunc[P, T]:
     async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
         nonlocal tasks
         key = hash((args, tuple(sorted(kwargs.items()))))
-        print(tasks)
         if key in tasks:
             return await tasks[key]
         task = create_task(func(*args, **kwargs))
@@ -93,13 +92,16 @@ def format_iso(iso: str) -> str:
         if not iso:
             return "时间未知"
 
-        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-
-        dt_sh = dt.astimezone(
-            timezone(timedelta(hours=8))
+        dt = datetime.fromisoformat(
+            iso.replace("Z", "+00:00")
         )
 
-        return dt_sh.strftime("%m-%d %H:%M")
+        # 自动读取系统时区
+        local_tz = datetime.now().astimezone().tzinfo
+
+        dt_local = dt.astimezone(local_tz)
+
+        return dt_local.strftime("%m-%d %H:%M")
 
     except ValueError:
         return "时间未知"
@@ -132,13 +134,89 @@ def _typst_render(typst_content: str) -> bytes:
     # pyrefly: ignore [redundant-cast]
     return cast(bytes, typst.compile(typst_content.encode(), format="png", ppi=144.0))
 
+
+class MonitorClient:
+    def __init__(
+        self,
+        slug: str,
+        match: dict,
+        client: PandaScoreClient,
+        bot: Bot,
+        group_id: int,
+    ):
+        self.slug = slug
+        self.match = match
+
+        self.client = client
+        self.bot = bot
+        self.group_id = group_id
+
+        self.task: Task | None = None
+
+    async def monitor_loop(self):
+        while True:
+            matches = (
+                    await self.client.list_past_matches()
+                    + await self.client.list_running_matches()
+                    + await self.client.list_upcoming_matches()
+            )
+
+            current = next(
+                (
+                    m
+                    for m in matches
+                    if m.get("slug", "").lower() == self.slug
+                ),
+                None,
+            )
+
+            if current is None:
+                logger.warning(f"监控目标消失：{self.slug}")
+                return
+
+            assert self.match is not None
+            current = cast(dict[str, Any], current)
+
+            if self.has_changed(self.match, current):
+                logger.info(f"比赛发生变化：{self.slug}")
+
+                await self.bot.send_group_msg(
+                    group_id=self.group_id,
+                    message=await typst_render(
+                        MatchParser.prerender_match(current, typst_template.push_comment),
+                        f"monitor",
+                    ),
+                )
+
+            self.match = current
+
+            if current.get("status") == "finished":
+                logger.info(f"比赛结束，停止监控：{self.slug}")
+                return
+
+            await sleep(CACHE_TTL)
+
+    @staticmethod
+    def has_changed(old: dict, new: dict) -> bool:
+        """比较需要监控的字段。"""
+
+        return any(
+            old.get(key) != new.get(key)
+            for key in (
+                "status",
+                "results",
+                "games",
+            )
+        )
+
+
 class MatchParser:
     @staticmethod
     def parse(match: dict[str, Any]) -> dict[str, Any]:
         # 基础信息
         serie = match.get("serie", {}).get("full_name", "Unknown Match")
         slug = match.get("slug", "unknown")
-        time = match.get("scheduled_at") or match.get("begin_at") or "unknown time"
+        match_time = match.get("scheduled_at") or match.get("begin_at") or "unknown time"
         status = match.get("status", "unknown")
 
         # 队伍
@@ -170,7 +248,7 @@ class MatchParser:
         return {
             "serie": serie,
             "slug": slug,
-            "time": format_iso(time),
+            "time": format_iso(match_time),
             "team_a": team_a,
             "team_b": team_b,
             "score_a": score_a,
@@ -224,6 +302,89 @@ class MatchParser:
         return content
 
     @classmethod
+    def prerender_match(cls, match: dict[str, Any], comment: str = "") -> str:
+        opponents = match.get("opponents") or []
+
+        team_a = (
+            opponents[0]
+            .get("opponent", {})
+            .get("name", "未知")
+            if len(opponents) > 0
+            else "未知"
+        )
+
+        team_b = (
+            opponents[1]
+            .get("opponent", {})
+            .get("name", "未知")
+            if len(opponents) > 1
+            else "未知"
+        )
+
+        results = match.get("results") or []
+
+        score_a = results[0].get("score", 0) if len(results) > 0 else 0
+        score_b = results[1].get("score", 0) if len(results) > 1 else 0
+
+        games = []
+
+        for game in match.get("games") or []:
+            winner_id = (
+                    game.get("winner") or {}
+            ).get("id")
+
+            if winner_id == (
+                    opponents[0]
+                            .get("opponent", {})
+                            .get("id")
+            ):
+                winner = team_a
+
+            elif winner_id == (
+                    opponents[1]
+                            .get("opponent", {})
+                            .get("id")
+            ):
+                winner = team_b
+
+            else:
+                winner = "未知"
+
+            games.append(
+                f"""
+                    (
+                        position: {game.get("position", 0)},
+                        winner: "{winner}",
+                        status: "{game.get("status", "unknown")}",
+                    ),
+                    """
+            )
+
+        games_text = "\n".join(games)
+
+        return f"""{typst_template.get_match}
+        #let match = (
+            name: "{match.get("name", "未知比赛")}",
+            league: "{(match.get("league") or {}).get("name", "未知赛事")}",
+            serie: "{(match.get("serie") or {}).get("full_name", "未知系列")}",
+            team_a: "{team_a}",
+            team_b: "{team_b}",
+            score_a: {score_a},
+            score_b: {score_b},
+            status: "{match.get("status", "unknown")}",
+            time: "{format_iso(match.get("scheduled_at") or match.get("begin_at") or "未知时间")}",
+            bo: {match.get("number_of_games", 0)},
+            games: (
+                {games_text}
+            ),
+        )
+        
+        {comment}
+
+        #match_detail(match)
+        """
+
+    @classmethod
     def classify_serie(cls, name: str) -> str:
         if not name:
             return "other"
@@ -260,6 +421,7 @@ class PandaScoreClient:
     async def _get(self, path, params=None) -> Any:
         if not self.session:
             self.session = ClientSession()
+        assert self.session is not None
         url = f"{self.base}{path}"
         async with self.session.get(url, headers=self.headers, params=params) as resp:
             return await resp.json()

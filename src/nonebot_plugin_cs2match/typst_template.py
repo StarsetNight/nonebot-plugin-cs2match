@@ -87,7 +87,7 @@ help_text = """#set text(font: ("Consolas", "SimHei"))
 
   card(
     "monitor <id> / 监视",
-    "监视比赛开始、比分变动、结束。"
+    "监视比赛开始、比分变动、结束，参数为“cancel”时取消监听。"
   ),
   
   card(
@@ -258,3 +258,299 @@ list_match = """#set text(font: ("Consolas", "SimHei"))
 ]
 
 """
+
+get_match = """#set text(font: ("Consolas", "SimHei"))
+
+#set page(
+  width: 320pt,
+  height: auto,
+  margin: 12pt,
+)
+
+// =====================
+// STATUS MAP
+// =====================
+#let status_map = (
+  "not_started": (
+    text: "未开始",
+    color: rgb(245, 158, 11),
+  ),
+  "running": (
+    text: "进行中",
+    color: rgb(239, 68, 68),
+  ),
+  "finished": (
+    text: "已结束",
+    color: rgb(16, 185, 129),
+  ),
+  "canceled": (
+    text: "已取消",
+    color: rgb(107, 114, 128),
+  ),
+  "postponed": (
+    text: "已延期",
+    color: rgb(59, 130, 246),
+  ),
+  "unknown": (
+    text: "未知",
+    color: rgb(156, 163, 175),
+  ),
+)
+
+
+// =====================
+// MATCH DETAIL
+// =====================
+#let match_detail(m) = [
+
+  #let s = status_map.at(
+    m.status,
+    default: status_map.at("unknown")
+  )
+
+  // =====================
+  // MAIN CARD
+  // =====================
+  #box(
+    width: 100%,
+    stroke: 0.6pt + rgb(229, 231, 235),
+    radius: 12pt,
+    inset: 12pt,
+
+    [
+
+      // =====================
+      // TOP INFO CARD
+      // =====================
+      #box(
+        width: 100%,
+        fill: rgb(248, 250, 252),
+        stroke: 0.5pt + rgb(229, 231, 235),
+        radius: 10pt,
+        inset: 10pt,
+
+        [
+
+          #grid(
+            columns: (1fr, auto),
+
+            [
+              #text(
+                size: 11pt,
+                weight: "bold",
+              )[
+                #m.name
+              ]
+
+              #v(3pt)
+
+              #text(
+                size: 8pt,
+                fill: rgb(107,114,128),
+              )[
+                #m.league · #m.serie
+              ]
+
+              #v(3pt)
+
+              #text(
+                size: 8pt,
+                fill: rgb(107,114,128),
+              )[
+                时间: #m.time
+              ]
+            ],
+
+            [
+              #text(
+                size: 8pt,
+                fill: s.color,
+                weight: "bold",
+              )[
+                #s.text
+              ]
+
+              #v(4pt)
+
+              #text(
+                size: 8pt,
+                fill: rgb(107,114,128),
+              )[
+                BO#m.bo
+              ]
+            ]
+          )
+        ]
+      )
+
+
+      #v(12pt)
+
+
+      // =====================
+      // TEAM SCORE
+      // =====================
+      #grid(
+        columns: (1fr, auto, 1fr),
+        align: center + horizon,
+
+        [
+          #box(
+            width: 80pt,
+            align(center + horizon)[
+              #text(
+                size: 12pt,
+                weight: "bold",
+                fill: rgb(37, 99, 235),
+              )[
+                #m.team_a
+              ]
+            ]
+          )
+        ],
+
+        [
+          #box(
+            fill: rgb(17, 24, 39),
+            radius: 8pt,
+            inset: 10pt,
+            align(center + horizon)[
+              #text(
+                size: 12pt,
+                weight: "bold",
+                fill: white,
+              )[
+                #m.score_a - #m.score_b
+              ]
+            ]
+          )
+        ],
+
+        [
+          #box(
+            width: 80pt,
+            align(center + horizon)[
+              #text(
+                size: 12pt,
+                weight: "bold",
+                fill: rgb(239, 68, 68),
+              )[
+                #m.team_b
+              ]
+            ]
+          )
+        ]
+      )
+
+
+      #v(12pt)
+
+
+      // =====================
+      // MAP LIST CARD
+      // =====================
+      #box(
+        width: 100%,
+        fill: rgb(250,250,250),
+        stroke: 0.5pt + rgb(229,231,235),
+        radius: 10pt,
+        inset: 10pt,
+
+        [
+
+          #text(
+            size: 9pt,
+            weight: "bold",
+          )[
+            Maps
+          ]
+
+          #v(6pt)
+
+
+          #if m.games.len() == 0 [
+
+            #text(
+              size: 8pt,
+              fill: rgb(156,163,175),
+            )[
+              暂无地图数据
+            ]
+
+          ]
+
+
+          #for g in m.games [
+
+            #let gs = status_map.at(
+              g.status,
+              default: status_map.at("unknown")
+            )
+
+
+            #grid(
+              columns: (1fr, 1fr, 1fr),
+              align: center,
+
+              [
+                #text(
+                  size: 8pt,
+                  fill: rgb(156,163,175),
+                )[
+                  Map #g.position
+                ]
+              ],
+
+              [
+                #text(
+                  size: 8pt,
+                )[
+                  Winner: #g.winner
+                ]
+              ],
+
+              [
+                #text(
+                  size: 8pt,
+                  fill: gs.color,
+                )[
+                  #gs.text
+                ]
+              ]
+            )
+
+            #v(4pt)
+          ]
+        ]
+      )
+    ]
+  )
+]
+"""
+
+push_comment = """#box(
+  width: 100%,
+  fill: rgb("#eff6ff"),
+  stroke: 0.5pt + rgb("#93c5fd"),
+  radius: 8pt,
+  inset: 8pt,
+)[
+  #text(
+    size: 9pt,
+    fill: rgb("#2563eb"),
+    weight: "bold",
+  )[
+    自动推送
+  ]
+
+  #v(3pt)
+
+  #text(
+    size: 8pt,
+    fill: rgb("#64748b"),
+  )[
+    比赛状态发生变化，已自动发送最新赛况！
+  ]
+]
+
+#v(10pt)"""
