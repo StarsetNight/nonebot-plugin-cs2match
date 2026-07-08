@@ -138,68 +138,139 @@ def _typst_render(typst_content: str) -> bytes:
 class MonitorClient:
     def __init__(
         self,
-        slug: str,
-        match: dict,
         client: PandaScoreClient,
         bot: Bot,
-        group_id: int,
     ):
-        self.slug = slug
-        self.match = match
-
         self.client = client
         self.bot = bot
-        self.group_id = group_id
+
+        # slug -> 群号集合
+        self.monitors: dict[str, set[int]] = {}
+
+        # slug -> 最近一次比赛数据
+        self.matches: dict[str, dict[str, Any]] = {}
 
         self.task: Task | None = None
 
+
+    def add_monitor(
+        self,
+        slug: str,
+        group_id: int,
+    ):
+        self.monitors.setdefault(
+            slug,
+            set(),
+        ).add(group_id)
+
+
+    def remove_monitor(
+        self,
+        slug: str,
+        group_id: int,
+    ):
+        groups = self.monitors.get(slug)
+
+        if groups is None:
+            return
+
+        groups.discard(group_id)
+
+        if not groups:
+            self.monitors.pop(slug, None)
+            self.matches.pop(slug, None)
+
+
     async def monitor_loop(self):
         while True:
+
+            if not self.monitors:
+                await sleep(CACHE_TTL)
+                continue
+
+
             matches = (
-                    await self.client.list_past_matches()
-                    + await self.client.list_running_matches()
-                    + await self.client.list_upcoming_matches()
+                await self.client.list_past_matches()
+            ) + (
+                await self.client.list_running_matches()
+            ) + (
+                await self.client.list_upcoming_matches()
             )
 
-            current = next(
-                (
-                    m
-                    for m in matches
-                    if m.get("slug", "").lower() == self.slug
-                ),
-                None,
-            )
 
-            if current is None:
-                logger.warning(f"监控目标消失：{self.slug}")
-                return
+            for slug, groups in self.monitors.items():
 
-            assert self.match is not None
-            current = cast(dict[str, Any], current)
-
-            if self.has_changed(self.match, current):
-                logger.info(f"比赛发生变化：{self.slug}")
-
-                await self.bot.send_group_msg(
-                    group_id=self.group_id,
-                    message=await typst_render(
-                        MatchParser.prerender_match(current, typst_template.push_comment),
-                        f"monitor",
+                current = next(
+                    (
+                        m
+                        for m in matches
+                        if m.get("slug", "").lower() == slug
                     ),
+                    None,
                 )
 
-            self.match = current
 
-            if current.get("status") == "finished":
-                logger.info(f"比赛结束，停止监控：{self.slug}")
-                return
+                if current is None:
+                    logger.warning(
+                        f"监控目标消失：{slug}"
+                    )
+                    continue
+
+
+                current = cast(
+                    dict[str, Any],
+                    current,
+                )
+
+
+                old = self.matches.get(slug)
+
+
+                if old is not None and self.has_changed(
+                    old,
+                    current,
+                ):
+                    logger.info(
+                        f"比赛发生变化：{slug}"
+                    )
+
+
+                    message = await typst_render(
+                        MatchParser.prerender_match(
+                            current,
+                            typst_template.push_comment,
+                        ),
+                        f"monitor",
+                    )
+
+
+                    for group_id in groups:
+                        await self.bot.send_group_msg(
+                            group_id=group_id,
+                            message=message,
+                        )
+
+
+                self.matches[slug] = current
+
+
+                if current.get("status") == "finished":
+                    logger.info(
+                        f"比赛结束，停止监控：{slug}"
+                    )
+
+                    self.monitors.pop(slug, None)
+                    self.matches.pop(slug, None)
+
 
             await sleep(CACHE_TTL)
 
-    @staticmethod
-    def has_changed(old: dict, new: dict) -> bool:
-        """比较需要监控的字段。"""
 
+    @staticmethod
+    def has_changed(
+        old: dict,
+        new: dict,
+    ) -> bool:
         return any(
             old.get(key) != new.get(key)
             for key in (

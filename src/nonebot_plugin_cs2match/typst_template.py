@@ -245,7 +245,7 @@ list_match = """#set text(font: ("Consolas", "SimHei"))
         weight: "bold",
         fill: primary,
       )[
-        🏆 #title
+        #title
       ]
 
       #v(8pt)
@@ -462,7 +462,7 @@ get_match = """#set text(font: ("Consolas", "SimHei"))
             size: 9pt,
             weight: "bold",
           )[
-            Maps
+            地图列表
           ]
 
           #v(6pt)
@@ -497,7 +497,7 @@ get_match = """#set text(font: ("Consolas", "SimHei"))
                   size: 8pt,
                   fill: rgb(156,163,175),
                 )[
-                  Map #g.position
+                  地图 #g.position
                 ]
               ],
 
@@ -505,7 +505,7 @@ get_match = """#set text(font: ("Consolas", "SimHei"))
                 #text(
                   size: 8pt,
                 )[
-                  Winner: #g.winner
+                  #g.winner 胜出
                 ]
               ],
 

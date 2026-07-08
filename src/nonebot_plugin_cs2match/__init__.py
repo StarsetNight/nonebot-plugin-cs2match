@@ -137,39 +137,81 @@ async def on_check_match(args: Message = CommandArg()):
 
 
 @monitor_match.handle()
-async def on_monitor_match(bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()):
+async def on_monitor_match(
+    bot: Bot,
+    event: GroupMessageEvent,
+    args: Message = CommandArg(),
+):
     global monitor_client
 
     slug = args.extract_plain_text().strip().lower()
 
+
     if not slug:
-        await monitor_match.finish("用法：monitor <slug>\n"
-                                   "取消监听：monitor cancel")
-
-    if slug == "cancel":
-        if monitor_client is None:
-            await monitor_match.finish(
-                "当前没有正在运行的比赛监听。"
-            )
-        assert monitor_client is not None
-        assert monitor_client.task is not None
-        monitor_client.task.cancel()
-
-        slug = monitor_client.slug
-
-        monitor_client = None
-
         await monitor_match.finish(
-            f"已取消比赛监听：{slug}"
+            "用法：monitor <slug>\n"
+            "取消监听：monitor cancel"
         )
 
-    client = cast(PandaScoreClient, panda_client)
+
+    if monitor_client is None:
+        client = cast(
+            PandaScoreClient,
+            panda_client,
+        )
+
+        monitor_client = MonitorClient(
+            client=client,
+            bot=bot,
+        )
+        assert monitor_client is not None
+
+
+    # 取消当前群监听
+    if slug == "cancel":
+
+        remove_slug = None
+
+        for s, groups in monitor_client.monitors.items():
+            if event.group_id in groups:
+                groups.remove(event.group_id)
+
+                if not groups:
+                    remove_slug = s
+
+                break
+
+
+        if remove_slug:
+            monitor_client.monitors.pop(
+                remove_slug,
+                None,
+            )
+            monitor_client.matches.pop(
+                remove_slug,
+                None,
+            )
+
+
+        await monitor_match.finish(
+            "已取消本群比赛监听。"
+        )
+
+
+    client = cast(
+        PandaScoreClient,
+        panda_client,
+    )
+
 
     matches = (
-            await client.list_past_matches()
-            + await client.list_running_matches()
-            + await client.list_upcoming_matches()
+        await client.list_past_matches()
+    ) + (
+        await client.list_running_matches()
+    ) + (
+        await client.list_upcoming_matches()
     )
+
 
     match = next(
         (
@@ -180,28 +222,37 @@ async def on_monitor_match(bot: Bot, event: GroupMessageEvent, args: Message = C
         None,
     )
 
+
     if match is None:
-        await monitor_match.finish(f"未找到比赛：{slug}")
+        await monitor_match.finish(
+            f"未找到比赛：{slug}"
+        )
 
-    match = cast(dict[str, Any], match)
 
-    if monitor_client is not None and monitor_client.task is not None:
-        monitor_client.task.cancel()
-
-    monitor_client = MonitorClient(
-        slug=slug,
-        match=match,
-        client=client,
-        bot=bot,
-        group_id=event.group_id,
+    match = cast(
+        dict[str, Any],
+        match,
     )
 
-    # 气笑了，前面刚赋值怎么可能是None？IDE非在这喊
-    assert monitor_client is not None
 
-    monitor_client.task = create_task(
-        monitor_client.monitor_loop()
+    monitor_client.add_monitor(
+        slug,
+        event.group_id,
     )
+
+
+    # 初始化快照
+    monitor_client.matches.setdefault(
+        slug,
+        match,
+    )
+
+
+    if monitor_client.task is None:
+        monitor_client.task = create_task(
+            monitor_client.monitor_loop()
+        )
+
 
     await monitor_match.finish(
         f"已开始监控比赛：{match.get('name', slug)}"
