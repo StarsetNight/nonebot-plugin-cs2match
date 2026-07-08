@@ -1,5 +1,6 @@
-# Copyright (c) 2023 StarsetNight
+# Copyright (c) 2026 StarsetNight, XuanRikka
 # SPDX-License-Identifier: MIT
+
 from typing import Coroutine
 from typing import ParamSpec, TypeVar
 from asyncio import create_task, Task
@@ -16,7 +17,7 @@ from ayafileio import open
 import typst
 
 from nonebot.adapters.onebot.v11 import MessageSegment
-from nonebot import require, get_driver, get_plugin_config, logger
+from nonebot import require, get_driver, get_plugin_config
 
 require("nonebot_plugin_localstore")
 from nonebot_plugin_localstore import get_plugin_cache_dir

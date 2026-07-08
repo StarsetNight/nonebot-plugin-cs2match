@@ -1,4 +1,4 @@
-# Copyright (c) 2023 StarsetNight
+# Copyright (c) 2026 StarsetNight, XuanRikka
 # SPDX-License-Identifier: MIT
 
 from typing import cast
@@ -96,6 +96,16 @@ async def on_list_matches(args: Message = CommandArg()):
             cache_key
         )
     )
+
+
+@check_match.handle()
+async def on_check_match(args: Message = CommandArg()):
+    pass
+
+
+@monitor_match.handle()
+async def on_monitor_match(args: Message = CommandArg()):
+    pass
 
 
 @whitelist_config.handle()

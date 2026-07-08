@@ -1,4 +1,4 @@
-# Copyright (c) 2023 StarsetNight
+# Copyright (c) 2026 StarsetNight, XuanRikka
 # SPDX-License-Identifier: MIT
 
 from pydantic import BaseModel

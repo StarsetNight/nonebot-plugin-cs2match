@@ -1,3 +1,6 @@
+# Copyright (c) 2026 StarsetNight, XuanRikka
+# SPDX-License-Identifier: MIT
+
 from __future__ import annotations
 from enum import Enum
 from pathlib import Path
