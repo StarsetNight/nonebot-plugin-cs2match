@@ -137,22 +137,16 @@ async def on_check_match(args: Message = CommandArg()):
 
 
 @monitor_match.handle()
-async def on_monitor_match(
-    bot: Bot,
-    event: GroupMessageEvent,
-    args: Message = CommandArg(),
-):
+async def on_monitor_match(bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()):
     global monitor_client
 
     slug = args.extract_plain_text().strip().lower()
-
 
     if not slug:
         await monitor_match.finish(
             "用法：monitor <slug>\n"
             "取消监听：monitor cancel"
         )
-
 
     if monitor_client is None:
         client = cast(
@@ -181,71 +175,40 @@ async def on_monitor_match(
 
                 break
 
-
         if remove_slug:
-            monitor_client.monitors.pop(
-                remove_slug,
-                None,
-            )
-            monitor_client.matches.pop(
-                remove_slug,
-                None,
-            )
+            monitor_client.monitors.pop(remove_slug, None)
+            monitor_client.matches.pop(remove_slug, None)
 
 
-        await monitor_match.finish(
-            "已取消本群比赛监听。"
-        )
-
+        await monitor_match.finish("已取消本群比赛监听。")
 
     client = cast(
         PandaScoreClient,
         panda_client,
     )
 
-
     matches = (
         await client.list_past_matches()
-    ) + (
-        await client.list_running_matches()
-    ) + (
-        await client.list_upcoming_matches()
+        + await client.list_running_matches()
+        + await client.list_upcoming_matches()
     )
 
-
     match = next(
-        (
-            m
-            for m in matches
-            if m.get("slug", "").lower() == slug
-        ),
+        (m for m in matches if m.get("slug", "").lower() == slug),
         None,
     )
 
-
     if match is None:
-        await monitor_match.finish(
-            f"未找到比赛：{slug}"
-        )
+        await monitor_match.finish(f"未找到比赛：{slug}")
+
+    match = cast(dict[str, Any], match)
 
 
-    match = cast(
-        dict[str, Any],
-        match,
-    )
-
-
-    monitor_client.add_monitor(
-        slug,
-        event.group_id,
-    )
+    monitor_client.add_monitor(slug,event.group_id,)
 
 
     # 初始化快照
-    monitor_client.matches.setdefault(
-        slug,
-        match,
-    )
+    monitor_client.matches.setdefault(slug,match,)
 
 
     if monitor_client.task is None:

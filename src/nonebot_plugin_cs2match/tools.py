@@ -16,7 +16,7 @@ from aiohttp import ClientSession
 from ayafileio import open
 import typst
 
-from nonebot.adapters.onebot.v11 import MessageSegment, Bot
+from nonebot.adapters.onebot.v11 import Message, MessageSegment, Bot
 from nonebot import require, get_driver, get_plugin_config, logger
 
 require("nonebot_plugin_localstore")
@@ -136,13 +136,9 @@ def _typst_render(typst_content: str) -> bytes:
 
 
 class MonitorClient:
-    def __init__(
-        self,
-        client: PandaScoreClient,
-        bot: Bot,
-    ):
-        self.client = client
-        self.bot = bot
+    def __init__(self, client: PandaScoreClient, bot: Bot):
+        self.client: PandaScoreClient = client
+        self.bot: Bot = bot
 
         # slug -> 群号集合
         self.monitors: dict[str, set[int]] = {}
@@ -153,22 +149,11 @@ class MonitorClient:
         self.task: Task | None = None
 
 
-    def add_monitor(
-        self,
-        slug: str,
-        group_id: int,
-    ):
-        self.monitors.setdefault(
-            slug,
-            set(),
-        ).add(group_id)
+    def add_monitor(self, slug: str, group_id: int):
+        self.monitors.setdefault(slug, set()).add(group_id)
 
 
-    def remove_monitor(
-        self,
-        slug: str,
-        group_id: int,
-    ):
+    def remove_monitor(self,slug: str,group_id: int,):
         groups = self.monitors.get(slug)
 
         if groups is None:
@@ -183,56 +168,33 @@ class MonitorClient:
 
     async def monitor_loop(self):
         while True:
-
             if not self.monitors:
                 await sleep(CACHE_TTL)
                 continue
 
-
             matches = (
                 await self.client.list_past_matches()
-            ) + (
-                await self.client.list_running_matches()
-            ) + (
-                await self.client.list_upcoming_matches()
+                + await self.client.list_running_matches()
+                + await self.client.list_upcoming_matches()
             )
 
 
             for slug, groups in self.monitors.items():
-
                 current = next(
-                    (
-                        m
-                        for m in matches
-                        if m.get("slug", "").lower() == slug
-                    ),
-                    None,
+                    (m for m in matches if m.get("slug", "").lower() == slug),
+                    None
                 )
-
 
                 if current is None:
-                    logger.warning(
-                        f"监控目标消失：{slug}"
-                    )
+                    logger.warning(f"监控目标消失：{slug}")
                     continue
 
-
-                current = cast(
-                    dict[str, Any],
-                    current,
-                )
-
+                current = cast(dict[str, Any], current)
 
                 old = self.matches.get(slug)
 
-
-                if old is not None and self.has_changed(
-                    old,
-                    current,
-                ):
-                    logger.info(
-                        f"比赛发生变化：{slug}"
-                    )
+                if old is not None and self.has_changed(old, current):
+                    logger.info(f"比赛发生变化：{slug}")
 
 
                     message = await typst_render(
@@ -240,24 +202,19 @@ class MonitorClient:
                             current,
                             typst_template.push_comment,
                         ),
-                        f"monitor",
+                        "monitor"
                     )
 
 
                     for group_id in groups:
-                        await self.bot.send_group_msg(
-                            group_id=group_id,
-                            message=message,
-                        )
+                        await self.bot.send_group_msg(group_id=group_id, message=Message(message))
 
 
                 self.matches[slug] = current
 
 
                 if current.get("status") == "finished":
-                    logger.info(
-                        f"比赛结束，停止监控：{slug}"
-                    )
+                    logger.info(f"比赛结束，停止监控：{slug}")
 
                     self.monitors.pop(slug, None)
                     self.matches.pop(slug, None)
@@ -267,17 +224,10 @@ class MonitorClient:
 
 
     @staticmethod
-    def has_changed(
-        old: dict,
-        new: dict,
-    ) -> bool:
+    def has_changed(old: dict, new: dict) -> bool:
         return any(
             old.get(key) != new.get(key)
-            for key in (
-                "status",
-                "results",
-                "games",
-            )
+            for key in ("status", "results", "games")
         )
 
 
