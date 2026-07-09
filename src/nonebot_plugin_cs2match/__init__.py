@@ -88,7 +88,11 @@ async def on_list_matches(args: Message = CommandArg()):
     else:
         cache_key = arg
 
-    matches = await func()
+    try:
+        matches = await func()
+    except Exception as e:
+        await list_matches.finish(f"由于API调度故障，请求失败：{e}")
+        matches = []  # 哄类型检查器
     _config = cast(DynamicConfigSystem, dynamic_config)
 
     await list_matches.finish(
@@ -111,7 +115,11 @@ async def on_check_match(args: Message = CommandArg()):
 
     await check_match.send(f"正在查询比赛({slug})\n请稍候...")
 
-    matches = await client.list_running_matches() + await client.list_upcoming_matches()
+    try:
+        matches = await client.list_running_matches() + await client.list_upcoming_matches()
+    except Exception as e:
+        await list_matches.finish(f"由于API调度故障，请求失败：{e}")
+        matches = []  # 哄类型检查器
 
     match = next(
         (m for m in matches if m.get("slug") == slug),
@@ -154,7 +162,11 @@ async def on_monitor_match(bot: Bot, event: GroupMessageEvent, args: Message = C
         monitor_client.remove_monitor(group_id=event.group_id)
         await monitor_match.finish("已取消本群比赛监视。")
 
-    matches = await client.list_matches()
+    try:
+        matches = await client.list_matches()
+    except Exception as e:
+        await list_matches.finish(f"由于API调度故障，请求失败：{e}")
+        matches = []  # 哄类型检查器
 
     match = next(
         (m for m in matches if m.get("slug", "").lower() == slug),

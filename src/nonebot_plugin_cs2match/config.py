@@ -16,5 +16,6 @@ class Config(BaseModel):
         ("cac", 60, ["cac"]),
         ("pnl", 50, ["pnl"]),
     ]  # 赛事系列，优先级，匹配赛事名称（小写）
+    client_timeout: int = 10
     cache_ttl: int = 60
     cache_max_size: int = 64

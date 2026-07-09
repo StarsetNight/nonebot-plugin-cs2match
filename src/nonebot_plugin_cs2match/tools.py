@@ -4,7 +4,7 @@
 from __future__ import annotations
 from typing import Coroutine
 from typing import ParamSpec, TypeVar
-from asyncio import create_task, Task, to_thread, sleep
+from asyncio import create_task, Task, to_thread, sleep, gather
 from functools import wraps
 from typing import Any, cast, Callable
 from datetime import datetime
@@ -12,7 +12,7 @@ from collections import defaultdict, OrderedDict
 from binascii import crc32
 from time import time
 
-from aiohttp import ClientSession, ClientError
+from aiohttp import ClientSession, ClientError, ClientTimeout
 from ayafileio import open
 import typst
 
@@ -158,46 +158,60 @@ class MonitorClient:
 
     async def monitor_loop(self):
         while True:
-            if not self.monitors:
-                await sleep(CACHE_TTL)
-                continue
-
-            matches = await self.client.list_matches()
-
-            for slug, groups in self.monitors.items():
-                current = next(
-                    (m for m in matches if m.get("slug", "").lower() == slug),
-                    None
-                )
-
-                if current is None:
-                    logger.warning(f"监控目标消失：{slug}")
+            try:
+                if not self.monitors:
+                    await sleep(CACHE_TTL)
                     continue
 
-                old = self.matches.get(slug)
+                matches = await self.client.list_matches()
 
-                if old is not None and self.has_changed(old, current):
-                    logger.info(f"比赛发生变化：{slug}")
-
-                    message = await typst_render(
-                        MatchParser.prerender_match(
-                            current,
-                            typst_template.push_comment
-                        ),
-                        "monitor"
+                for slug, groups in self.monitors.items():
+                    current = next(
+                        (m for m in matches if m.get("slug", "").lower() == slug),
+                        None
                     )
 
+                    if current is None:
+                        logger.warning(f"监控目标消失：{slug}")
+                        continue
+
+                    old = self.matches.get(slug)
+
+                    if old is not None and self.has_changed(old, current):
+                        logger.info(f"比赛发生变化：{slug}")
+
+                        message = await typst_render(
+                            MatchParser.prerender_match(
+                                current,
+                                typst_template.push_comment
+                            ),
+                            "monitor"
+                        )
+
+                        for group_id in groups:
+                            await self.bot.send_group_msg(group_id=group_id, message=Message(message))
+
+                    self.matches[slug] = current
+
+                    if current.get("status") == "finished":
+                        logger.info(f"比赛结束，停止监控：{slug}")
+                        self.monitors.pop(slug, None)
+                        self.matches.pop(slug, None)
+
+            except Exception as e:
+                for groups in self.monitors.values():
                     for group_id in groups:
-                        await self.bot.send_group_msg(group_id=group_id, message=Message(message))
+                        logger.exception("比赛监视服务异常")
+                        await self.bot.send_group_msg(
+                            group_id=group_id,
+                            message=f">比赛监视服务异常<\n"
+                                    f"错误：{type(e).__name__}\n"
+                                    f"详情请管理员查看日志，\n"
+                                    f"如再次看到此消息，请取消监视。"
+                        )
+            finally:
+                await sleep(CACHE_TTL)
 
-                self.matches[slug] = current
-
-                if current.get("status") == "finished":
-                    logger.info(f"比赛结束，停止监控：{slug}")
-                    self.monitors.pop(slug, None)
-                    self.matches.pop(slug, None)
-
-            await sleep(CACHE_TTL)
 
 
     @staticmethod
@@ -414,7 +428,7 @@ class PandaScoreClient:
         self.headers = {
             "Authorization": f"Bearer {token}"
         }
-        self.session = ClientSession()
+        self.session = ClientSession(timeout=ClientTimeout(total=config.client_timeout))
 
     async def _get(self, path, params=None) -> Any:
         url = f"{self.base}{path}"
@@ -429,11 +443,12 @@ class PandaScoreClient:
         """
         注意，这个函数调用消耗3次API调用额度，并且会存储3份不同类型的比赛列表缓存。
         """
-        return (
-            await self.list_past_matches() +
-            await self.list_running_matches() +
-            await self.list_upcoming_matches()
+        past, running, upcoming = await gather(
+            self.list_past_matches(),
+            self.list_running_matches(),
+            self.list_upcoming_matches(),
         )
+        return past + running + upcoming
 
     @async_dedupe
     @func_ttl_cache(MAXSIZE)
