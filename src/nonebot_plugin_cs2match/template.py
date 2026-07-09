@@ -1,6 +1,26 @@
 # Copyright (c) 2026 StarsetNight, XuanRikka
 # SPDX-License-Identifier: MIT
 
+# help_plain_text和help_text两边一定要同时改！
+
+help_plain_text = """NoneBot CS2赛事查询帮助
+
+/cs2help
+显示此帮助信息。
+
+/matches [past|running|upcoming]
+查询CS2比赛列表，支持查看已结束、进行中和即将开始的比赛。
+
+/match <id>
+查询指定比赛的详细比分信息。
+
+/monitor <id>
+开启比赛监听，自动推送比赛开始、比分变化和结束状态。
+使用 /monitor cancel 可取消当前监听。
+
+/cs2whitelist <on|off>
+开启或关闭比赛列表白名单过滤。"""
+
 help_text = """#set text(font: ("Consolas", "SimHei"))
 
 #set page(

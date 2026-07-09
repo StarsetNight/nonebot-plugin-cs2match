@@ -1,6 +1,6 @@
 [project]
 name = "nonebot-plugin-cs2match"
-version = "1.0.0"
+version = "1.0.1"
 description = "实时追踪 Counter-Strike 2 职业赛事，开赛自动提醒、关键赛况与大比分异动推送。"
 license = "MIT"
 readme = "README.md"

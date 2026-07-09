@@ -11,7 +11,7 @@ from nonebot.plugin import PluginMetadata
 
 from .config import Config
 from .tools import PandaScoreClient, MonitorClient, MatchParser, typst_render
-from .typst_template import help_text
+from .template import help_plain_text, help_text
 from .rule import is_enabled
 from .dynamic_config import DynamicConfigSystem, PriorityMode
 
@@ -30,9 +30,12 @@ monitor_client: MonitorClient | None = None
 __plugin_meta__ = PluginMetadata(
     name="CS2赛事助手",
     description="实时追踪 Counter-Strike 2 职业赛事，开赛自动提醒、关键赛况与大比分异动推送",
-    usage=help_text,
+    usage=help_plain_text,
+    type="application",
+    homepage="https://github.com/StarsetNight/nonebot-plugin-cs2match",
     config=Config,
-    extra={}
+    supported_adapters={"~onebot.v11"},
+    extra={"author": "StarsetNight <starsetnight@outlook.com>"}
 )
 
 @driver.on_startup

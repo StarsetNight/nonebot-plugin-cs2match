@@ -22,7 +22,7 @@ from nonebot import require, get_driver, get_plugin_config, logger
 require("nonebot_plugin_localstore")
 from nonebot_plugin_localstore import get_plugin_cache_dir
 
-from . import typst_template
+from . import template
 from .config import Config
 
 driver = get_driver()
@@ -183,7 +183,7 @@ class MonitorClient:
                         message = await typst_render(
                             MatchParser.prerender_match(
                                 current,
-                                typst_template.push_comment
+                                template.push_comment
                             ),
                             "monitor"
                         )
@@ -374,7 +374,7 @@ class MatchParser:
 
         games_text = "\n".join(games)
 
-        return f"""{typst_template.get_match}
+        return f"""{template.get_match}
         #let match = (
             name: "{match.get("name", "未知比赛")}",
             league: "{(match.get("league") or {}).get("name", "未知赛事")}",
