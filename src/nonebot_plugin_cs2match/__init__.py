@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: MIT
 
 from typing import cast, Any
-from asyncio import create_task
 
 from nonebot import logger, get_driver, get_plugin_config, on_command, require
 from nonebot.adapters.onebot.v11 import Message, GROUP_ADMIN, GROUP_OWNER, Bot, GroupMessageEvent
@@ -112,11 +111,7 @@ async def on_check_match(args: Message = CommandArg()):
 
     await check_match.send(f"正在查询比赛({slug})\n请稍候...")
 
-    matches = (
-        await client.list_running_matches()
-        + await client.list_upcoming_matches()
-        + await client.list_past_matches()
-    )
+    matches = await client.list_running_matches() + await client.list_upcoming_matches()
 
     match = next(
         (m for m in matches if m.get("slug") == slug),
@@ -145,36 +140,21 @@ async def on_monitor_match(bot: Bot, event: GroupMessageEvent, args: Message = C
     if not slug:
         await monitor_match.finish(
             "用法：monitor <slug>\n"
-            "取消监听：monitor cancel"
+            "取消监视：monitor cancel"
         )
+
+    client = cast(PandaScoreClient, panda_client)  # 获取API的HTTP客户端
 
     if monitor_client is None:
-        client = cast(
-            PandaScoreClient,
-            panda_client
-        )
-
-        monitor_client = MonitorClient(
-            client=client,
-            bot=bot
-        )
+        monitor_client = MonitorClient(client=client, bot=bot)  #
     assert monitor_client is not None
 
-    # 取消当前群监听
+    # 取消当前群比赛监视
     if slug == "cancel":
         monitor_client.remove_monitor(group_id=event.group_id)
-        await monitor_match.finish("已取消本群比赛监听。")
+        await monitor_match.finish("已取消本群比赛监视。")
 
-    client = cast(
-        PandaScoreClient,
-        panda_client,
-    )
-
-    matches = (
-        await client.list_past_matches()
-        + await client.list_running_matches()
-        + await client.list_upcoming_matches()
-    )
+    matches = await client.list_matches()
 
     match = next(
         (m for m in matches if m.get("slug", "").lower() == slug),
@@ -183,16 +163,13 @@ async def on_monitor_match(bot: Bot, event: GroupMessageEvent, args: Message = C
 
     if match is None:
         await monitor_match.finish(f"未找到比赛：{slug}")
-
     match = cast(dict[str, Any], match)
 
+    if match.get("status", "unknown") in {"finished", "canceled"}:
+        await monitor_match.finish(f"比赛已结束/取消，不可监视：{slug}")
 
-    monitor_client.add_monitor(slug,event.group_id)
-
-
-    await monitor_match.finish(
-        f"已开始监控比赛：{match.get('name', slug)}"
-    )
+    monitor_client.add_monitor(slug, event.group_id)
+    await monitor_match.finish(f"已开始监视比赛：{match.get('name', slug)}")
 
 
 @whitelist_config.handle()

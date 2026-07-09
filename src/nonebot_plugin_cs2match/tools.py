@@ -12,7 +12,7 @@ from collections import defaultdict, OrderedDict
 from binascii import crc32
 from time import time
 
-from aiohttp import ClientSession
+from aiohttp import ClientSession, ClientError
 from ayafileio import open
 import typst
 
@@ -92,9 +92,7 @@ def format_iso(iso: str) -> str:
         if not iso:
             return "时间未知"
 
-        dt = datetime.fromisoformat(
-            iso.replace("Z", "+00:00")
-        )
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
 
         # 自动读取系统时区
         local_tz = datetime.now().astimezone().tzinfo
@@ -138,16 +136,11 @@ class MonitorClient:
     def __init__(self, client: PandaScoreClient, bot: Bot):
         self.client: PandaScoreClient = client
         self.bot: Bot = bot
-
         # slug -> 群号集合
         self.monitors: dict[str, set[int]] = {}
-
         # slug -> 最近一次比赛数据
         self.matches: dict[str, dict[str, Any]] = {}
-
-        self.task: Task = create_task(
-            self.monitor_loop()
-        )
+        self.task: Task = create_task(self.monitor_loop())
 
 
     def add_monitor(self, slug: str, group_id: int):
@@ -169,12 +162,7 @@ class MonitorClient:
                 await sleep(CACHE_TTL)
                 continue
 
-            matches = (
-                await self.client.list_past_matches()
-                + await self.client.list_running_matches()
-                + await self.client.list_upcoming_matches()
-            )
-
+            matches = await self.client.list_matches()
 
             for slug, groups in self.monitors.items():
                 current = next(
@@ -186,13 +174,10 @@ class MonitorClient:
                     logger.warning(f"监控目标消失：{slug}")
                     continue
 
-                current = cast(dict[str, Any], current)
-
                 old = self.matches.get(slug)
 
                 if old is not None and self.has_changed(old, current):
                     logger.info(f"比赛发生变化：{slug}")
-
 
                     message = await typst_render(
                         MatchParser.prerender_match(
@@ -202,20 +187,15 @@ class MonitorClient:
                         "monitor"
                     )
 
-
                     for group_id in groups:
                         await self.bot.send_group_msg(group_id=group_id, message=Message(message))
 
-
                 self.matches[slug] = current
-
 
                 if current.get("status") == "finished":
                     logger.info(f"比赛结束，停止监控：{slug}")
-
                     self.monitors.pop(slug, None)
                     self.matches.pop(slug, None)
-
 
             await sleep(CACHE_TTL)
 
@@ -434,23 +414,26 @@ class PandaScoreClient:
         self.headers = {
             "Authorization": f"Bearer {token}"
         }
-        self.session: ClientSession | None = None
+        self.session = ClientSession()
 
     async def _get(self, path, params=None) -> Any:
-        if not self.session:
-            self.session = ClientSession()
-        assert self.session is not None
         url = f"{self.base}{path}"
-        async with self.session.get(url, headers=self.headers, params=params) as resp:
-            return await resp.json()
+        try:
+            async with self.session.get(url, headers=self.headers, params=params) as resp:
+                return await resp.json()
+        except (ClientError, TimeoutError) as e:
+            logger.warning(f"请求失败：{url}：{e}")
+            raise
 
-    @async_dedupe
-    @func_ttl_cache(MAXSIZE)
     async def list_matches(self) -> list[dict[str, Any]]:
-        return [
-            m for m in await self._get("/matches")
-            if m.get("videogame", {}).get("id") == 3
-        ]
+        """
+        注意，这个函数调用消耗3次API调用额度，并且会存储3份不同类型的比赛列表缓存。
+        """
+        return (
+            await self.list_past_matches() +
+            await self.list_running_matches() +
+            await self.list_upcoming_matches()
+        )
 
     @async_dedupe
     @func_ttl_cache(MAXSIZE)
