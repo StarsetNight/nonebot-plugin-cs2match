@@ -1,16 +1,16 @@
-# Copyright (c) 2023 StarsetNight
+# Copyright (c) 2026 StarsetNight, XuanRikka
 # SPDX-License-Identifier: MIT
 
-from typing import cast
+from typing import cast, Any
 
 from nonebot import logger, get_driver, get_plugin_config, on_command, require
-from nonebot.adapters.onebot.v11 import Message, GROUP_ADMIN, GROUP_OWNER
+from nonebot.adapters.onebot.v11 import Message, GROUP_ADMIN, GROUP_OWNER, Bot, GroupMessageEvent
 from nonebot.params import CommandArg
 from nonebot.permission import SUPERUSER
 from nonebot.plugin import PluginMetadata
 
 from .config import Config
-from .tools import PandaScoreClient, MatchParser, typst_render
+from .tools import PandaScoreClient, MonitorClient, MatchParser, typst_render
 from .typst_template import help_text
 from .rule import is_enabled
 from .dynamic_config import DynamicConfigSystem, PriorityMode
@@ -24,6 +24,7 @@ config = get_plugin_config(Config)  # 取自config.py中的静态配置
 
 panda_client: PandaScoreClient | None = None
 dynamic_config: DynamicConfigSystem | None = None  # 取自插件内编写的DynamicConfigSystem
+monitor_client: MonitorClient | None = None
 
 # 注册插件
 __plugin_meta__ = PluginMetadata(
@@ -87,7 +88,11 @@ async def on_list_matches(args: Message = CommandArg()):
     else:
         cache_key = arg
 
-    matches = await func()
+    try:
+        matches = await func()
+    except Exception as e:
+        await list_matches.finish(f"由于API调度故障，请求失败：{e}")
+        matches = []  # 哄类型检查器
     _config = cast(DynamicConfigSystem, dynamic_config)
 
     await list_matches.finish(
@@ -96,6 +101,87 @@ async def on_list_matches(args: Message = CommandArg()):
             cache_key
         )
     )
+
+
+@check_match.handle()
+async def on_check_match(args: Message = CommandArg()):
+    slug = args.extract_plain_text().strip()
+
+    if not slug:
+        await check_match.finish("用法：match <slug>\n"
+                                 "slug可在查询比赛列表的单个比赛左下角中找到。")
+
+    client = cast(PandaScoreClient, panda_client)
+
+    await check_match.send(f"正在查询比赛({slug})\n请稍候...")
+
+    try:
+        matches = await client.list_running_matches() + await client.list_upcoming_matches()
+    except Exception as e:
+        await list_matches.finish(f"由于API调度故障，请求失败：{e}")
+        matches = []  # 哄类型检查器
+
+    match = next(
+        (m for m in matches if m.get("slug") == slug),
+        None,
+    )
+
+    if match is None:
+        await check_match.finish(f"未找到比赛：{slug}")
+
+    match = cast(dict[str, Any], match)
+
+    await check_match.finish(
+        await typst_render(
+            MatchParser.prerender_match(match),
+            "get_match",
+        )
+    )
+
+
+@monitor_match.handle()
+async def on_monitor_match(bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()):
+    global monitor_client
+
+    slug = args.extract_plain_text().strip().lower()
+
+    if not slug:
+        await monitor_match.finish(
+            "用法：monitor <slug>\n"
+            "取消监视：monitor cancel"
+        )
+
+    client = cast(PandaScoreClient, panda_client)  # 获取API的HTTP客户端
+
+    if monitor_client is None:
+        monitor_client = MonitorClient(client=client, bot=bot)  #
+    assert monitor_client is not None
+
+    # 取消当前群比赛监视
+    if slug == "cancel":
+        monitor_client.remove_monitor(group_id=event.group_id)
+        await monitor_match.finish("已取消本群比赛监视。")
+
+    try:
+        matches = await client.list_matches()
+    except Exception as e:
+        await list_matches.finish(f"由于API调度故障，请求失败：{e}")
+        matches = []  # 哄类型检查器
+
+    match = next(
+        (m for m in matches if m.get("slug", "").lower() == slug),
+        None,
+    )
+
+    if match is None:
+        await monitor_match.finish(f"未找到比赛：{slug}")
+    match = cast(dict[str, Any], match)
+
+    if match.get("status", "unknown") in {"finished", "canceled"}:
+        await monitor_match.finish(f"比赛已结束/取消，不可监视：{slug}")
+
+    monitor_client.add_monitor(slug, event.group_id)
+    await monitor_match.finish(f"已开始监视比赛：{match.get('name', slug)}")
 
 
 @whitelist_config.handle()
