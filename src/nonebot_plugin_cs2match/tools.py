@@ -131,7 +131,6 @@ async def typst_render(typst_content: str, cache_key: str) -> MessageSegment:
 
 def _typst_render(typst_content: str) -> bytes:
     # 一般来说是不会输出多页的，所以干脆写个cast哄一下检查器了
-    # pyrefly: ignore [redundant-cast]
     return cast(bytes, typst.compile(typst_content.encode(), format="png", ppi=144.0))
 
 
@@ -146,24 +145,22 @@ class MonitorClient:
         # slug -> 最近一次比赛数据
         self.matches: dict[str, dict[str, Any]] = {}
 
-        self.task: Task | None = None
+        self.task: Task = create_task(
+            self.monitor_loop()
+        )
 
 
     def add_monitor(self, slug: str, group_id: int):
         self.monitors.setdefault(slug, set()).add(group_id)
 
 
-    def remove_monitor(self,slug: str,group_id: int,):
-        groups = self.monitors.get(slug)
+    def remove_monitor(self, group_id: int):
+        for (_, groups) in self.monitors.items():
+            groups.discard(group_id)
 
-        if groups is None:
-            return
-
-        groups.discard(group_id)
-
-        if not groups:
-            self.monitors.pop(slug, None)
-            self.matches.pop(slug, None)
+        self.monitors = {
+            k: v for k, v in self.monitors.items() if v
+        }
 
 
     async def monitor_loop(self):
@@ -200,7 +197,7 @@ class MonitorClient:
                     message = await typst_render(
                         MatchParser.prerender_match(
                             current,
-                            typst_template.push_comment,
+                            typst_template.push_comment
                         ),
                         "monitor"
                     )

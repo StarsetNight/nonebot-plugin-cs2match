@@ -151,35 +151,18 @@ async def on_monitor_match(bot: Bot, event: GroupMessageEvent, args: Message = C
     if monitor_client is None:
         client = cast(
             PandaScoreClient,
-            panda_client,
+            panda_client
         )
 
         monitor_client = MonitorClient(
             client=client,
-            bot=bot,
+            bot=bot
         )
-        assert monitor_client is not None
-
+    assert monitor_client is not None
 
     # 取消当前群监听
     if slug == "cancel":
-
-        remove_slug = None
-
-        for s, groups in monitor_client.monitors.items():
-            if event.group_id in groups:
-                groups.remove(event.group_id)
-
-                if not groups:
-                    remove_slug = s
-
-                break
-
-        if remove_slug:
-            monitor_client.monitors.pop(remove_slug, None)
-            monitor_client.matches.pop(remove_slug, None)
-
-
+        monitor_client.remove_monitor(group_id=event.group_id)
         await monitor_match.finish("已取消本群比赛监听。")
 
     client = cast(
@@ -204,17 +187,7 @@ async def on_monitor_match(bot: Bot, event: GroupMessageEvent, args: Message = C
     match = cast(dict[str, Any], match)
 
 
-    monitor_client.add_monitor(slug,event.group_id,)
-
-
-    # 初始化快照
-    monitor_client.matches.setdefault(slug,match,)
-
-
-    if monitor_client.task is None:
-        monitor_client.task = create_task(
-            monitor_client.monitor_loop()
-        )
+    monitor_client.add_monitor(slug,event.group_id)
 
 
     await monitor_match.finish(
