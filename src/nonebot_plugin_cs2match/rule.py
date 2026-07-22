@@ -3,9 +3,7 @@
 
 import nonebot
 
-from .config import Config
-
-config = nonebot.get_plugin_config(Config)
+from . import config
 
 
 async def is_enabled():

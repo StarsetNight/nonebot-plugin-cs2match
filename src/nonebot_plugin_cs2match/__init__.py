@@ -10,6 +10,10 @@ from nonebot.permission import SUPERUSER
 from nonebot.plugin import PluginMetadata
 
 from .config import Config
+# init的配置读取必须先于其他要使用init中配置的导入模块，否则会缺配置读不了
+driver = get_driver()
+global_config = driver.config
+config = get_plugin_config(Config)  # 取自config.py中的静态配置
 from .tools import PandaScoreClient, MonitorClient, MatchParser, typst_render
 from .template import help_plain_text, help_text
 from .rule import is_enabled
@@ -17,10 +21,6 @@ from .dynamic_config import DynamicConfigSystem, PriorityMode
 
 require("nonebot_plugin_localstore")
 from nonebot_plugin_localstore import get_plugin_data_file
-
-driver = get_driver()
-global_config = driver.config
-config = get_plugin_config(Config)  # 取自config.py中的静态配置
 
 panda_client: PandaScoreClient | None = None
 dynamic_config: DynamicConfigSystem | None = None  # 取自插件内编写的DynamicConfigSystem

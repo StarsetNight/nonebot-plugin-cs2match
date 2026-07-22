@@ -658,7 +658,6 @@ dependencies = [
     { name = "nonebot-plugin-localstore" },
     { name = "nonebot2" },
     { name = "pydantic" },
-    { name = "python-dotenv" },
     { name = "typst" },
 ]
 
@@ -670,7 +669,6 @@ requires-dist = [
     { name = "nonebot-plugin-localstore", specifier = ">=0.7.4" },
     { name = "nonebot2", specifier = ">=2.4.4" },
     { name = "pydantic", specifier = ">=2.13.4" },
-    { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "typst", specifier = ">=0.15.0" },
 ]
 

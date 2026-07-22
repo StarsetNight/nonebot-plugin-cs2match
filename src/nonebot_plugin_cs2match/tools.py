@@ -17,17 +17,12 @@ from ayafileio import open
 import typst
 
 from nonebot.adapters.onebot.v11 import Message, MessageSegment, Bot
-from nonebot import require, get_driver, get_plugin_config, logger
+from nonebot import require, logger
 
 require("nonebot_plugin_localstore")
 from nonebot_plugin_localstore import get_plugin_cache_dir
 
-from . import template
-from .config import Config
-
-driver = get_driver()
-global_config = driver.config
-config = get_plugin_config(Config)
+from . import template, config
 
 RENDER_CACHE_DIR = get_plugin_cache_dir() / "render_cache"
 RENDER_CACHE_DIR.mkdir(exist_ok=True)
@@ -287,7 +282,7 @@ class MatchParser:
             reverse=True
         ))
 
-        content = typst_template.list_match
+        content = template.list_match
 
         for serie_name, serie_matches in sorted_series.items():
             content += f'#series_card("{serie_name}", [\n'
