@@ -19,9 +19,12 @@ help_plain_text = """NoneBot CS2赛事查询帮助
 使用 /monitor cancel 可取消当前监听。
 
 /cs2whitelist <on|off>
-开启或关闭比赛列表白名单过滤。"""
+开启或关闭比赛列表白名单过滤。
 
-help_text = """#set text(font: ("Consolas", "SimHei"))
+/cs2uid
+查看自己的用户ID与当前场景ID。"""
+
+help_text = """#set text(font: ("Consolas", "SimHei", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Zen Hei"))
 
 #set page(
   width: 400pt,
@@ -114,10 +117,15 @@ help_text = """#set text(font: ("Consolas", "SimHei"))
     "cs2whitelist <on/off> / 白名单",
     "设置比赛列表是否仅显示白名单赛事系列。"
   ),
+
+  card(
+    "cs2uid / 我的id",
+    "查看自己的用户ID与当前场景ID。"
+  ),
 )
 """
 
-list_match = """#set text(font: ("Consolas", "SimHei"))
+list_match = """#set text(font: ("Consolas", "SimHei", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Zen Hei"))
 
 #set page(
   width: 320pt,
@@ -166,6 +174,7 @@ list_match = """#set text(font: ("Consolas", "SimHei"))
 #let finished = tag("已结束", rgb("#10b981"))
 #let canceled = tag("取消", rgb("#6b7280"))
 #let postponed = tag("延期", rgb("#3b82f6"))
+#let unknown = tag("未知", rgb("#9ca3af"))
 
 
 // =====================
@@ -279,7 +288,7 @@ list_match = """#set text(font: ("Consolas", "SimHei"))
 
 """
 
-get_match = """#set text(font: ("Consolas", "SimHei"))
+get_match = """#set text(font: ("Consolas", "SimHei", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Zen Hei"))
 
 #set page(
   width: 320pt,

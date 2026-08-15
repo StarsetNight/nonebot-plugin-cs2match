@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: MIT
 
 from __future__ import annotations
-from typing import Coroutine
+
+import asyncio
+import json
+from typing import Coroutine, Iterable
 from typing import ParamSpec, TypeVar
-from asyncio import create_task, Task, to_thread, sleep, gather
+from asyncio import CancelledError, create_task, Task, to_thread, sleep, gather
 from functools import wraps
 from typing import Any, cast, Callable
 from datetime import datetime
@@ -16,10 +19,11 @@ from aiohttp import ClientSession, ClientError, ClientTimeout
 from ayafileio import open
 import typst
 
-from nonebot.adapters.onebot.v11 import Message, MessageSegment, Bot
-from nonebot import require, logger
+from nonebot import require, logger, get_bot
 
 require("nonebot_plugin_localstore")
+require("nonebot_plugin_alconna")
+from nonebot_plugin_alconna.uniseg import Image, UniMessage, Target
 from nonebot_plugin_localstore import get_plugin_cache_dir
 
 from . import template, config
@@ -30,6 +34,25 @@ RENDER_CACHE_DIR.mkdir(exist_ok=True)
 P = ParamSpec("P")
 T = TypeVar("T")
 AsyncFunc = Callable[P, Coroutine[Any, Any, T]]
+
+_KNOWN_STATUS = {"not_started", "running", "finished", "canceled", "postponed"}
+
+
+def _typst_str(value: Any) -> str:
+    """把任意值转成安全的 typst 字符串字面量，防止 API 数据破坏模板。"""
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def _safe_status(status: str) -> str:
+    """把比赛状态归一化到模板中已定义的状态标识符。"""
+    return status if status in _KNOWN_STATUS else "unknown"
+
+
+# 到达这些状态后监视即终止（推送终态并自动取消监视）
+_TERMINAL_STATUS = {"finished", "canceled"}
+
+# 连续多少轮轮询未在接口中看到监视目标时，自动取消监视（每轮间隔 cache_ttl 秒）
+MAX_MISSES = 10
 
 def async_dedupe(func: AsyncFunc[P, T]) -> AsyncFunc[P, T]:
     tasks: dict[int, Task[T]] = {}
@@ -100,16 +123,16 @@ def format_iso(iso: str) -> str:
         return "时间未知"
 
 @async_dedupe
-async def typst_render(typst_content: str, cache_key: str) -> MessageSegment:
+async def typst_render(typst_content: str, cache_key: str) -> Image:
     cache_index = crc32(typst_content.encode("utf-8"))
 
     cache_file_path = RENDER_CACHE_DIR / f"{cache_key}_{cache_index:08X}.png"
 
     if cache_file_path.exists():
         cache_file = open(cache_file_path, "rb")
-        cache_data = await cache_file.readall()
+        cache_data = cast(bytes, await cache_file.readall())  # 我都二进制打开图像文件了怎么可能读出来str？
         await cache_file.close()
-        return MessageSegment.image(cache_data)
+        return Image(raw=cache_data)
 
     # 清理死缓存
     for i in RENDER_CACHE_DIR.rglob(f"{cache_key}_*.png"):
@@ -120,7 +143,7 @@ async def typst_render(typst_content: str, cache_key: str) -> MessageSegment:
     await cache_file.write(file_data)
     await cache_file.close()
 
-    return MessageSegment.image(file_data)
+    return Image(raw=file_data)
 
 def _typst_render(typst_content: str) -> bytes:
     # 一般来说是不会输出多页的，所以干脆写个cast哄一下检查器了
@@ -128,27 +151,41 @@ def _typst_render(typst_content: str) -> bytes:
 
 
 class MonitorClient:
-    def __init__(self, client: PandaScoreClient, bot: Bot):
+    def __init__(self, client: PandaScoreClient, self_id: str):
         self.client: PandaScoreClient = client
-        self.bot: Bot = bot
-        # slug -> 群号集合
-        self.monitors: dict[str, set[int]] = {}
+        self.self_id: str = self_id
+        # slug -> 群场景ID集合
+        self.monitors: dict[str, set[str]] = {}
         # slug -> 最近一次比赛数据
         self.matches: dict[str, dict[str, Any]] = {}
+        # slug -> 连续轮询未发现次数
+        self.miss_count: dict[str, int] = {}
         self.task: Task = create_task(self.monitor_loop())
 
 
-    def add_monitor(self, slug: str, group_id: int):
+    def add_monitor(self, slug: str, group_id: str):
         self.monitors.setdefault(slug, set()).add(group_id)
 
 
-    def remove_monitor(self, group_id: int):
+    def remove_monitor(self, group_id: str):
         for (_, groups) in self.monitors.items():
             groups.discard(group_id)
 
         self.monitors = {
             k: v for k, v in self.monitors.items() if v
         }
+
+
+    async def stop(self) -> None:
+        """停止后台监视任务，供插件关闭时调用。"""
+        task = self.task
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except CancelledError:
+            pass
 
 
     async def monitor_loop(self):
@@ -158,7 +195,36 @@ class MonitorClient:
                     await sleep(CACHE_TTL)
                     continue
 
-                matches = await self.client.list_matches()
+                try:
+                    bot = get_bot(self.self_id)
+                except ValueError:
+                    logger.warning(f"监视推送失败：找不到Bot实例（{self.self_id}）")
+                    await sleep(CACHE_TTL)
+                    continue
+
+                # 三个接口分别容错：单个接口失败不影响本轮其它比赛的检测
+                results = await gather(
+                    self.client.list_past_matches(),
+                    self.client.list_running_matches(),
+                    self.client.list_upcoming_matches(),
+                    return_exceptions=True,
+                )
+                matches: list[dict[str, Any]] = []
+                failed = 0
+                for r in results:
+                    if isinstance(r, BaseException):
+                        failed += 1
+                        logger.warning(f"监视轮询接口请求失败：{type(r).__name__}: {r}")
+                    else:
+                        # 有病吧？我都isinstance完了你静态检查器还在这执迷不悟
+                        r = cast(Iterable[dict[str, Any]], r)
+                        matches.extend(r)
+                if failed == 3:
+                    logger.warning("监视轮询所有接口均失败，本轮跳过")
+                    await sleep(CACHE_TTL)
+                    continue
+
+                finished_slugs: list[str] = []
 
                 for slug, groups in self.monitors.items():
                     current = next(
@@ -167,45 +233,91 @@ class MonitorClient:
                     )
 
                     if current is None:
-                        logger.warning(f"监控目标消失：{slug}")
+                        # 可能处于"比赛结束但past接口尚未索引"的窗口期，也可能已被删除
+                        misses = self.miss_count.get(slug, 0) + 1
+                        self.miss_count[slug] = misses
+                        if misses >= MAX_MISSES:
+                            logger.warning(f"监控目标长时间消失，取消监视：{slug}")
+                            finished_slugs.append(slug)
+                            for group_id in groups:
+                                try:
+                                    await UniMessage(
+                                        ">监控目标长时间未出现，已自动取消监视<\n"
+                                        "比赛可能已被删除。"
+                                    ).send(target=Target.group(group_id), bot=bot)
+                                except Exception as e:
+                                    logger.exception(f"取消监视通知因 {e} 发送失败：{slug}")
+                        else:
+                            logger.warning(f"监控目标消失：{slug}（第{misses}/{MAX_MISSES}次）")
                         continue
 
-                    old = self.matches.get(slug)
+                    self.miss_count.pop(slug, None)
 
-                    if old is not None and self.has_changed(old, current):
-                        logger.info(f"比赛发生变化：{slug}")
+                    try:
+                        old = self.matches.get(slug)
 
-                        message = await typst_render(
-                            MatchParser.prerender_match(
-                                current,
-                                template.push_comment
-                            ),
-                            "monitor"
-                        )
+                        if self.should_notify(old, current):
+                            logger.info(f"比赛发生变化：{slug}")
 
-                        for group_id in groups:
-                            await self.bot.send_group_msg(group_id=group_id, message=Message(message))
+                            comment = (
+                                "比赛已结束，自动监视已取消。"
+                                if old is None
+                                else template.push_comment
+                            )
+
+                            message = await typst_render(
+                                MatchParser.prerender_match(current, comment),
+                                "monitor"
+                            )
+
+                            for group_id in groups:
+                                await UniMessage(message).send(
+                                    target=Target.group(group_id), bot=bot
+                                )
+                    except Exception as e:
+                        logger.exception(f"监视因 {e} 推送失败：{slug}")
+                        continue
 
                     self.matches[slug] = current
 
-                    if current.get("status") == "finished":
-                        logger.info(f"比赛结束，停止监控：{slug}")
-                        self.monitors.pop(slug, None)
-                        self.matches.pop(slug, None)
+                    if current.get("status") in _TERMINAL_STATUS:
+                        logger.info(f"比赛已结束/取消，停止监控：{slug}")
+                        finished_slugs.append(slug)
 
+                # 循环结束后统一移除，避免迭代中修改字典
+                for slug in finished_slugs:
+                    self.monitors.pop(slug, None)
+                    self.matches.pop(slug, None)
+                    self.miss_count.pop(slug, None)
+
+            except CancelledError:
+                logger.info("比赛监视服务已停止")
+                raise
             except Exception as e:
+                try:
+                    bot = get_bot(self.self_id)
+                except ValueError:
+                    bot = None
                 for groups in self.monitors.values():
                     for group_id in groups:
                         logger.exception("比赛监视服务异常")
-                        await self.bot.send_group_msg(
-                            group_id=group_id,
-                            message=f">比赛监视服务异常<\n"
-                                    f"错误：{type(e).__name__}\n"
-                                    f"详情请管理员查看日志，\n"
-                                    f"如再次看到此消息，请取消监视。"
-                        )
-            finally:
-                await sleep(CACHE_TTL)
+                        if bot is not None:
+                            await UniMessage(
+                                f">比赛监视服务异常<\n"
+                                f"错误：{type(e).__name__}\n"
+                                f"详情请管理员查看日志，\n"
+                                f"如再次看到此消息，请取消监视。"
+                            ).send(target=Target.group(group_id), bot=bot)
+            await sleep(CACHE_TTL)
+
+
+
+    @staticmethod
+    def should_notify(old: dict[str, Any] | None, new: dict[str, Any]) -> bool:
+        """是否需要推送：首次见到终态（确保比赛结束不静默消失），或状态/比分/地图发生变化。"""
+        if old is None:
+            return new.get("status") in _TERMINAL_STATUS
+        return MonitorClient.has_changed(old, new)
 
 
 
@@ -221,36 +333,37 @@ class MatchParser:
     @staticmethod
     def parse(match: dict[str, Any]) -> dict[str, Any]:
         # 基础信息
-        serie = match.get("serie", {}).get("full_name", "Unknown Match")
+        serie = (match.get("serie") or {}).get("full_name", "Unknown Match")
         slug = match.get("slug", "unknown")
         match_time = match.get("scheduled_at") or match.get("begin_at") or "unknown time"
-        status = match.get("status", "unknown")
+        status = _safe_status(match.get("status", "unknown"))
 
         # 队伍
         opponents = match.get("opponents", [])
         if len(opponents) >= 2:
-            team_a = opponents[0]["opponent"]["name"]
-            team_b = opponents[1]["opponent"]["name"]
+            team_a = opponents[0].get("opponent", {}).get("name", "TBD")
+            team_b = opponents[1].get("opponent", {}).get("name", "TBD")
         else:
             team_a = "TBD"
             team_b = "TBD"
 
         # 比分（bo match）
         score_map: dict[int, int] = {}
-        for r in match.get("results", []):
+        for r in match.get("results") or []:
             tid = r.get("team_id")
-            score_map[tid] = r.get("score", 0)
+            if tid is not None:
+                score_map[tid] = r.get("score", 0)
 
         # 按顺序映射
         score_a = 0
         score_b = 0
 
         if len(opponents) >= 2:
-            a_id = opponents[0]["opponent"]["id"]
-            b_id = opponents[1]["opponent"]["id"]
+            a_id = opponents[0].get("opponent", {}).get("id")
+            b_id = opponents[1].get("opponent", {}).get("id")
 
-            score_a = score_map.get(a_id)
-            score_b = score_map.get(b_id)
+            score_a = score_map.get(a_id, 0) if a_id is not None else 0
+            score_b = score_map.get(b_id, 0) if b_id is not None else 0
 
         return {
             "serie": serie,
@@ -285,21 +398,21 @@ class MatchParser:
         content = template.list_match
 
         for serie_name, serie_matches in sorted_series.items():
-            content += f'#series_card("{serie_name}", [\n'
+            content += f'#series_card({_typst_str(serie_name)}, [\n'
 
-            serie_matches.sort(key=lambda x: x["scheduled_at"])
+            serie_matches.sort(key=lambda x: x.get("scheduled_at") or "")
 
             for match in serie_matches:
                 match_json = cls.parse(match)
 
                 content += (
                     f'#match_card('
-                    f'"{match_json["slug"]}",'
-                    f'"{match_json["time"]}",'
-                    f'"{match_json["team_a"]}",'
+                    f'{_typst_str(match_json["slug"])},'
+                    f'{_typst_str(match_json["time"])},'
+                    f'{_typst_str(match_json["team_a"])},'
                     f'{match_json["score_a"]},'
                     f'{match_json["score_b"]},'
-                    f'"{match_json["team_b"]}",'
+                    f'{_typst_str(match_json["team_b"])},'
                     f'{match_json["status"]}'
                     f')\n'
                 )
@@ -330,8 +443,11 @@ class MatchParser:
 
         results = match.get("results") or []
 
-        score_a = results[0].get("score", 0) if len(results) > 0 else 0
-        score_b = results[1].get("score", 0) if len(results) > 1 else 0
+        score_a = int((results[0].get("score") if len(results) > 0 else 0) or 0)
+        score_b = int((results[1].get("score") if len(results) > 1 else 0) or 0)
+
+        a_id = opponents[0].get("opponent", {}).get("id") if len(opponents) > 0 else None
+        b_id = opponents[1].get("opponent", {}).get("id") if len(opponents) > 1 else None
 
         games = []
 
@@ -340,18 +456,10 @@ class MatchParser:
                     game.get("winner") or {}
             ).get("id")
 
-            if winner_id == (
-                    opponents[0]
-                            .get("opponent", {})
-                            .get("id")
-            ):
+            if winner_id == a_id:
                 winner = team_a
 
-            elif winner_id == (
-                    opponents[1]
-                            .get("opponent", {})
-                            .get("id")
-            ):
+            elif winner_id == b_id:
                 winner = team_b
 
             else:
@@ -360,9 +468,9 @@ class MatchParser:
             games.append(
                 f"""
                     (
-                        position: {game.get("position", 0)},
-                        winner: "{winner}",
-                        status: "{game.get("status", "unknown")}",
+                        position: {int(game.get("position") or 0)},
+                        winner: {_typst_str(winner)},
+                        status: {_typst_str(_safe_status(game.get("status", "unknown")))},
                     ),
                     """
             )
@@ -371,16 +479,16 @@ class MatchParser:
 
         return f"""{template.get_match}
         #let match = (
-            name: "{match.get("name", "未知比赛")}",
-            league: "{(match.get("league") or {}).get("name", "未知赛事")}",
-            serie: "{(match.get("serie") or {}).get("full_name", "未知系列")}",
-            team_a: "{team_a}",
-            team_b: "{team_b}",
+            name: {_typst_str(match.get("name", "未知比赛"))},
+            league: {_typst_str((match.get("league") or {}).get("name", "未知赛事"))},
+            serie: {_typst_str((match.get("serie") or {}).get("full_name", "未知系列"))},
+            team_a: {_typst_str(team_a)},
+            team_b: {_typst_str(team_b)},
             score_a: {score_a},
             score_b: {score_b},
-            status: "{match.get("status", "unknown")}",
-            time: "{format_iso(match.get("scheduled_at") or match.get("begin_at") or "未知时间")}",
-            bo: {match.get("number_of_games", 0)},
+            status: {_typst_str(_safe_status(match.get("status", "unknown")))},
+            time: {_typst_str(format_iso(match.get("scheduled_at") or match.get("begin_at") or "未知时间"))},
+            bo: {int(match.get("number_of_games") or 0)},
             games: (
                 {games_text}
             ),
@@ -425,12 +533,17 @@ class PandaScoreClient:
         }
         self.session = ClientSession(timeout=ClientTimeout(total=config.client_timeout))
 
+    async def close(self) -> None:
+        """关闭底层 aiohttp 会话，释放连接池资源。"""
+        if self.session is not None and not self.session.closed:
+            await self.session.close()
+
     async def _get(self, path, params=None) -> Any:
         url = f"{self.base}{path}"
         try:
             async with self.session.get(url, headers=self.headers, params=params) as resp:
                 return await resp.json()
-        except (ClientError, TimeoutError) as e:
+        except (ClientError, TimeoutError, asyncio.TimeoutError) as e:
             logger.warning(f"请求失败：{url}：{e}")
             raise
 
@@ -450,7 +563,7 @@ class PandaScoreClient:
     async def list_past_matches(self) -> list[dict[str, Any]]:
         return [
             m for m in await self._get("/matches/past")
-            if m.get("videogame", {}).get("id") == 3
+            if isinstance(m, dict) and m.get("videogame", {}).get("id") == 3
         ]
 
     @async_dedupe
@@ -458,7 +571,7 @@ class PandaScoreClient:
     async def list_running_matches(self) -> list[dict[str, Any]]:
         return [
             m for m in await self._get("/matches/running")
-            if m.get("videogame", {}).get("id") == 3
+            if isinstance(m, dict) and m.get("videogame", {}).get("id") == 3
         ]
 
     @async_dedupe
@@ -466,7 +579,7 @@ class PandaScoreClient:
     async def list_upcoming_matches(self) -> list[dict[str, Any]]:
         return [
             m for m in await self._get("/matches/upcoming")
-            if m.get("videogame", {}).get("id") == 3
+            if isinstance(m, dict) and m.get("videogame", {}).get("id") == 3
         ]
 
     @async_dedupe
@@ -479,7 +592,7 @@ class PandaScoreClient:
     async def get_match_score(self, match_id: str) -> dict[str, int] | None:
         match = await self.get_match(match_id)
 
-        results = match.get("results", [])
+        results = match.get("results") or []
         opponents = match.get("opponents", [])
 
         if len(opponents) < 2:

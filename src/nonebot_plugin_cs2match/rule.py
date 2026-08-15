@@ -1,8 +1,6 @@
 # Copyright (c) 2026 StarsetNight, XuanRikka
 # SPDX-License-Identifier: MIT
 
-import nonebot
-
 from . import config
 
 

@@ -1,12 +1,11 @@
 # Copyright (c) 2026 StarsetNight, XuanRikka
 # SPDX-License-Identifier: MIT
 
-from typing import cast, Any
+from typing import Any, cast
 
-from nonebot import logger, get_driver, get_plugin_config, on_command, require
-from nonebot.adapters.onebot.v11 import Message, GROUP_ADMIN, GROUP_OWNER, Bot, GroupMessageEvent
-from nonebot.params import CommandArg
-from nonebot.permission import SUPERUSER
+from arclet.alconna import Alconna, Args
+from nonebot import logger, get_driver, get_plugin_config, require
+from nonebot.permission import SUPERUSER, Permission
 from nonebot.plugin import PluginMetadata
 
 from .config import Config
@@ -20,7 +19,11 @@ from .rule import is_enabled
 from .dynamic_config import DynamicConfigSystem, PriorityMode
 
 require("nonebot_plugin_localstore")
+require("nonebot_plugin_alconna")
+require("nonebot_plugin_uninfo")
+from nonebot_plugin_alconna import Query, on_alconna
 from nonebot_plugin_localstore import get_plugin_data_file
+from nonebot_plugin_uninfo import Uninfo, ADMIN, SceneType
 
 panda_client: PandaScoreClient | None = None
 dynamic_config: DynamicConfigSystem | None = None  # 取自插件内编写的DynamicConfigSystem
@@ -34,7 +37,7 @@ __plugin_meta__ = PluginMetadata(
     type="application",
     homepage="https://github.com/StarsetNight/nonebot-plugin-cs2match",
     config=Config,
-    supported_adapters={"~onebot.v11"},
+    supported_adapters={"~onebot.v11", "~qq"},
     extra={"author": "StarsetNight <starsetnight@outlook.com>"}
 )
 
@@ -55,13 +58,57 @@ async def on_startup_check():
         dynamic_config = await DynamicConfigSystem.from_path(config_path)
 
 
-get_help = on_command("cs2help", aliases={"cs2帮助"}, priority=10, block=True)
-list_matches = on_command("matches", aliases={"比赛列表"}, rule=is_enabled, priority=10, block=True)
-check_match = on_command("match", aliases={"比分"}, rule=is_enabled, priority=10, block=True)
-monitor_match = on_command("monitor", aliases={"监视"}, rule=is_enabled,
-                           permission=SUPERUSER | GROUP_OWNER | GROUP_ADMIN, priority=10, block=True)
-whitelist_config = on_command("cs2whitelist", aliases={"白名单"}, rule=is_enabled,
-                           permission=SUPERUSER | GROUP_OWNER | GROUP_ADMIN, priority=10, block=True)
+@driver.on_shutdown
+async def on_shutdown_cleanup():
+    """关闭插件持有的连接与后台任务。"""
+    global monitor_client, panda_client
+    try:
+        if monitor_client is not None:
+            await monitor_client.stop()
+            monitor_client = None
+        if panda_client is not None:
+            await panda_client.close()
+            panda_client = None
+    except Exception as e:
+        logger.exception(f"插件资源清理失败：{e}")
+
+
+get_help = on_alconna(
+    Alconna("cs2help"),
+    aliases=("cs2帮助",),
+    priority=10, block=True,
+)
+list_matches = on_alconna(
+    Alconna("matches", Args["mode?", str]),
+    aliases=("比赛列表",),
+    rule=is_enabled,
+    priority=10, block=True,
+)
+check_match = on_alconna(
+    Alconna("match", Args["slug", str]),
+    aliases=("比分",),
+    rule=is_enabled,
+    priority=10, block=True,
+)
+monitor_match = on_alconna(
+    Alconna("monitor", Args["slug", str]),
+    aliases=("监视",),
+    rule=is_enabled,
+    permission=SUPERUSER | ADMIN(),
+    priority=10, block=True,
+)
+whitelist_config = on_alconna(
+    Alconna("cs2whitelist", Args["state", str]),
+    aliases=("白名单",),
+    rule=is_enabled,
+    permission=SUPERUSER | ADMIN(),
+    priority=10, block=True,
+)
+get_my_id = on_alconna(
+    Alconna("cs2uid"),
+    aliases=("我的id",),
+    priority=10, block=True,
+)
 
 
 @get_help.handle()
@@ -70,8 +117,8 @@ async def on_get_help():
 
 
 @list_matches.handle()
-async def on_list_matches(args: Message = CommandArg()):
-    arg = args.extract_plain_text().strip()
+async def on_list_matches(mode: Query[str] = Query("mode", default="")):
+    arg = mode.result.strip()
 
     client = cast(PandaScoreClient, panda_client)
 
@@ -107,8 +154,8 @@ async def on_list_matches(args: Message = CommandArg()):
 
 
 @check_match.handle()
-async def on_check_match(args: Message = CommandArg()):
-    slug = args.extract_plain_text().strip()
+async def on_check_match(slug: Query[str] = Query("slug", default="")):
+    slug = slug.result.strip()
 
     if not slug:
         await check_match.finish("用法：match <slug>\n"
@@ -119,9 +166,9 @@ async def on_check_match(args: Message = CommandArg()):
     await check_match.send(f"正在查询比赛({slug})\n请稍候...")
 
     try:
-        matches = await client.list_running_matches() + await client.list_upcoming_matches()
+        matches = await client.list_matches()
     except Exception as e:
-        await list_matches.finish(f"由于API调度故障，请求失败：{e}")
+        await check_match.finish(f"由于API调度故障，请求失败：{e}")
         matches = []  # 哄类型检查器
 
     match = next(
@@ -143,10 +190,10 @@ async def on_check_match(args: Message = CommandArg()):
 
 
 @monitor_match.handle()
-async def on_monitor_match(bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()):
+async def on_monitor_match(session: Uninfo, slug: Query[str] = Query("slug", default="")):
     global monitor_client
 
-    slug = args.extract_plain_text().strip().lower()
+    slug = slug.result.strip().lower()
 
     if not slug:
         await monitor_match.finish(
@@ -154,21 +201,24 @@ async def on_monitor_match(bot: Bot, event: GroupMessageEvent, args: Message = C
             "取消监视：monitor cancel"
         )
 
+    if session.scene.type != SceneType.GROUP:
+        await monitor_match.finish("该命令仅限群聊使用。")
+
     client = cast(PandaScoreClient, panda_client)  # 获取API的HTTP客户端
 
     if monitor_client is None:
-        monitor_client = MonitorClient(client=client, bot=bot)  #
+        monitor_client = MonitorClient(client=client, self_id=session.self_id)
     assert monitor_client is not None
 
     # 取消当前群比赛监视
     if slug == "cancel":
-        monitor_client.remove_monitor(group_id=event.group_id)
+        monitor_client.remove_monitor(group_id=session.scene.id)
         await monitor_match.finish("已取消本群比赛监视。")
 
     try:
         matches = await client.list_matches()
     except Exception as e:
-        await list_matches.finish(f"由于API调度故障，请求失败：{e}")
+        await monitor_match.finish(f"由于API调度故障，请求失败：{e}")
         matches = []  # 哄类型检查器
 
     match = next(
@@ -183,13 +233,13 @@ async def on_monitor_match(bot: Bot, event: GroupMessageEvent, args: Message = C
     if match.get("status", "unknown") in {"finished", "canceled"}:
         await monitor_match.finish(f"比赛已结束/取消，不可监视：{slug}")
 
-    monitor_client.add_monitor(slug, event.group_id)
+    monitor_client.add_monitor(slug, session.scene.id)
     await monitor_match.finish(f"已开始监视比赛：{match.get('name', slug)}")
 
 
 @whitelist_config.handle()
-async def on_whitelist_config(args: Message = CommandArg()):
-    arg = args.extract_plain_text().strip().lower()
+async def on_whitelist_config(state: Query[str] = Query("state", default="")):
+    arg = state.result.strip().lower()
     if arg not in ["on", "off"]:
         await whitelist_config.finish("命令用法：whitelist <on/off>")
     _config = cast(DynamicConfigSystem, dynamic_config)
@@ -197,4 +247,11 @@ async def on_whitelist_config(args: Message = CommandArg()):
     await _config.save()
     await whitelist_config.finish(f"仅白名单赛事模式被设置为{'开启' if arg == 'on' else '关闭'}。")
 
+
+@get_my_id.handle()
+async def on_get_my_id(session: Uninfo):
+    await get_my_id.finish(
+        f"你的用户ID：{session.user.id}\n"
+        f"当前场景ID：{session.scene.id}\n"
+    )
 
