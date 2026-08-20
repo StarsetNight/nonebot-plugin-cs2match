@@ -36,6 +36,7 @@ T = TypeVar("T")
 AsyncFunc = Callable[P, Coroutine[Any, Any, T]]
 
 _KNOWN_STATUS = {"not_started", "running", "finished", "canceled", "postponed"}
+_TERMINAL_STATUS = {"finished", "canceled"}
 
 
 def _typst_str(value: Any) -> str:
@@ -46,13 +47,6 @@ def _typst_str(value: Any) -> str:
 def _safe_status(status: str) -> str:
     """把比赛状态归一化到模板中已定义的状态标识符。"""
     return status if status in _KNOWN_STATUS else "unknown"
-
-
-# 到达这些状态后监视即终止（推送终态并自动取消监视）
-_TERMINAL_STATUS = {"finished", "canceled"}
-
-# 连续多少轮轮询未在接口中看到监视目标时，自动取消监视（每轮间隔 cache_ttl 秒）
-MAX_MISSES = 10
 
 def async_dedupe(func: AsyncFunc[P, T]) -> AsyncFunc[P, T]:
     tasks: dict[int, Task[T]] = {}
@@ -234,9 +228,12 @@ class MonitorClient:
 
                     if current is None:
                         # 可能处于"比赛结束但past接口尚未索引"的窗口期，也可能已被删除
+                        if failed > 0:
+                            # 本轮部分接口失败，数据不完整："目标消失"不可信，不计数
+                            continue
                         misses = self.miss_count.get(slug, 0) + 1
                         self.miss_count[slug] = misses
-                        if misses >= MAX_MISSES:
+                        if misses >= config.MAX_MISSES:
                             logger.warning(f"监控目标长时间消失，取消监视：{slug}")
                             finished_slugs.append(slug)
                             for group_id in groups:
@@ -248,7 +245,7 @@ class MonitorClient:
                                 except Exception as e:
                                     logger.exception(f"取消监视通知因 {e} 发送失败：{slug}")
                         else:
-                            logger.warning(f"监控目标消失：{slug}（第{misses}/{MAX_MISSES}次）")
+                            logger.warning(f"监控目标消失：{slug}（第{misses}/{config.MAX_MISSES}次）")
                         continue
 
                     self.miss_count.pop(slug, None)
@@ -299,8 +296,8 @@ class MonitorClient:
                 except ValueError:
                     bot = None
                 for groups in self.monitors.values():
+                    logger.exception("比赛监视服务异常")
                     for group_id in groups:
-                        logger.exception("比赛监视服务异常")
                         if bot is not None:
                             await UniMessage(
                                 f">比赛监视服务异常<\n"
@@ -431,7 +428,7 @@ class MatchParser:
             opponents[0]
             .get("opponent", {})
             .get("name", "未知")
-            if len(opponents) > 0
+            if len(opponents) >= 2
             else "未知"
         )
 
@@ -439,7 +436,7 @@ class MatchParser:
             opponents[1]
             .get("opponent", {})
             .get("name", "未知")
-            if len(opponents) > 1
+            if len(opponents) >= 2
             else "未知"
         )
 
@@ -496,13 +493,28 @@ class MatchParser:
 
         team_a, team_b = cls.team_names(match)
 
-        results = match.get("results") or []
+        # 如果只能获取到一边选手的信息，那还有什么意义呢？
+        if len(opponents) >= 2:
+            a_id = opponents[0].get("opponent", {}).get("id")
+            b_id = opponents[1].get("opponent", {}).get("id")
+        else:
+            a_id = b_id = None
 
-        score_a = int((results[0].get("score") if len(results) > 0 else 0) or 0)
-        score_b = int((results[1].get("score") if len(results) > 1 else 0) or 0)
+        # 与 MatchParser.parse 保持一致：按 team_id 映射比分，
+        # 不依赖 results 数组与 opponents 数组的索引顺序
+        score_map: dict[int, int] = {}
+        for r in match.get("results") or []:
+            tid = r.get("team_id")
+            if tid is not None:
+                score_map[tid] = r.get("score") or 0
 
-        a_id = opponents[0].get("opponent", {}).get("id") if len(opponents) > 0 else None
-        b_id = opponents[1].get("opponent", {}).get("id") if len(opponents) > 1 else None
+        if a_id is not None and b_id is not None:
+            a_id = cast(int, a_id)
+            b_id = cast(int, b_id)
+            score_a = score_map.get(a_id, 0)
+            score_b = score_map.get(b_id, 0)
+        else:
+            score_a = score_b = 0
 
         games = []
 

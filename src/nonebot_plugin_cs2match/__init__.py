@@ -5,7 +5,7 @@ from typing import Any, cast
 
 from arclet.alconna import Alconna, Args, AllParam
 from nonebot import logger, get_driver, get_plugin_config, require
-from nonebot.permission import SUPERUSER, Permission
+from nonebot.permission import SUPERUSER
 from nonebot.plugin import PluginMetadata
 
 from .config import Config
@@ -55,7 +55,11 @@ async def on_startup_check():
     if not config_path.exists():
         dynamic_config = await DynamicConfigSystem.new(config_path)
     else:
-        dynamic_config = await DynamicConfigSystem.from_path(config_path)
+        try:
+            dynamic_config = await DynamicConfigSystem.from_path(config_path)
+        except Exception as e:
+            logger.warning(f"配置文件损坏（{e}），已回退重建默认配置：{config_path}")
+            dynamic_config = await DynamicConfigSystem.new(config_path)
 
 
 @driver.on_shutdown
@@ -171,7 +175,7 @@ async def on_check_match(slug: UniMessage):
         await check_match.finish(f"由于API调度故障，请求失败：{e}")
         matches = []  # 哄类型检查器
 
-    match, matched_by, team_hits = find_match(matches, slug)
+    match, matched_by, team_hits = find_match(matches, slug, slug_case_sensitive=False)
 
     if match is None:
         await check_match.finish(f"未找到比赛：{slug}")
@@ -214,10 +218,10 @@ async def on_monitor_match(session: Uninfo, slug: UniMessage):
         monitor_client = MonitorClient(client=client, self_id=session.self_id)
     assert monitor_client is not None
 
-    # 取消当前群比赛监视
+    # 取消当前群全部比赛监视
     if slug == "cancel":
         monitor_client.remove_monitor(group_id=session.scene.id)
-        await monitor_match.finish("已取消本群比赛监视。")
+        await monitor_match.finish("已取消本群全部比赛监视。")
 
     try:
         matches = await client.list_matches()
@@ -235,8 +239,9 @@ async def on_monitor_match(session: Uninfo, slug: UniMessage):
         await monitor_match.finish(f"比赛已结束/取消，不可监视：{slug}")
 
     # 统一以比赛真实 slug 作为监视键：队名后备命中时尤其关键，
-    # 否则监视轮询按 slug 查找将永远找不到目标
-    monitor_slug = str(match.get("slug", slug)).lower()
+    # 否则监视轮询按 slug 查找将永远找不到目标。
+    # 注意，这里写的是get("slug") or slug而不是get("slug", slug)，因为这样能防止slug对应的值是None的情况
+    monitor_slug = str(match.get("slug") or slug).lower()
 
     if matched_by == "team" and team_hits > 1:
         team_a, team_b = MatchParser.team_names(match)

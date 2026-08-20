@@ -11,12 +11,12 @@ help_plain_text = """NoneBot CS2赛事查询帮助
 /matches [past|running|upcoming]
 查询CS2比赛列表，支持查看已结束、进行中和即将开始的比赛。
 
-/match <id>
-查询指定比赛的详细比分信息。
+/match <slug或队名>
+查询指定比赛的详细比分信息，支持直接输入战队名（同名多场时展示第一个并提示）。
 
-/monitor <id>
-开启比赛监听，自动推送比赛开始、比分变化和结束状态。
-使用 /monitor cancel 可取消当前监听。
+/monitor <slug或队名>
+追加比赛监听，自动推送比赛开始、比分变化和结束状态。
+使用 /monitor cancel 可取消本群全部监听。
 
 /cs2whitelist <on|off>
 开启或关闭比赛列表白名单过滤。
@@ -104,13 +104,13 @@ help_text = """#set text(font: ("Consolas", "SimHei", "Microsoft YaHei", "PingFa
   ),
 
   card(
-    "match <id> / 比分",
-    "查看比赛大比分详情。"
+    "match <slug/队名> / 比分",
+    "查看比赛大比分详情，支持直接输入战队名（同名多场时展示第一个并提示）。"
   ),
 
   card(
-    "monitor <id> / 监视",
-    "监视比赛开始、比分变动、结束，参数为“cancel”时取消监听。"
+    "monitor <slug/队名> / 监视",
+    "监视比赛开始、比分变动、结束，参数为“cancel”时取消本群全部监听。"
   ),
   
   card(

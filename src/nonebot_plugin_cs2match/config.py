@@ -14,8 +14,9 @@ class Config(BaseModel):
         ("esl", 80, ["esl"]),
         ("pgl", 70, ["pgl"]),
         ("cac", 60, ["cac"]),
-        ("pnl", 50, ["pnl"]),
+        ("ewc", 50, ["esports world cup"]),
     ]  # 赛事系列，优先级，匹配赛事名称（小写）
     client_timeout: int = 10
     cache_ttl: float = 60
     cache_max_size: int = 64
+    MAX_MISSES: int = 10
