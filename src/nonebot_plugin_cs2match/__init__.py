@@ -3,7 +3,7 @@
 
 from typing import Any, cast
 
-from arclet.alconna import Alconna, Args
+from arclet.alconna import Alconna, Args, AllParam
 from nonebot import logger, get_driver, get_plugin_config, require
 from nonebot.permission import SUPERUSER, Permission
 from nonebot.plugin import PluginMetadata
@@ -13,7 +13,7 @@ from .config import Config
 driver = get_driver()
 global_config = driver.config
 config = get_plugin_config(Config)  # 取自config.py中的静态配置
-from .tools import PandaScoreClient, MonitorClient, MatchParser, typst_render
+from .tools import PandaScoreClient, MonitorClient, MatchParser, typst_render, find_match
 from .template import help_plain_text, help_text
 from .rule import is_enabled
 from .dynamic_config import DynamicConfigSystem, PriorityMode
@@ -21,7 +21,7 @@ from .dynamic_config import DynamicConfigSystem, PriorityMode
 require("nonebot_plugin_localstore")
 require("nonebot_plugin_alconna")
 require("nonebot_plugin_uninfo")
-from nonebot_plugin_alconna import Query, on_alconna
+from nonebot_plugin_alconna import Query, on_alconna, UniMessage
 from nonebot_plugin_localstore import get_plugin_data_file
 from nonebot_plugin_uninfo import Uninfo, ADMIN, SceneType
 
@@ -85,13 +85,13 @@ list_matches = on_alconna(
     priority=10, block=True,
 )
 check_match = on_alconna(
-    Alconna("match", Args["slug", str]),
+    Alconna("match", Args["slug", AllParam]),
     aliases=("比分",),
     rule=is_enabled,
     priority=10, block=True,
 )
 monitor_match = on_alconna(
-    Alconna("monitor", Args["slug", str]),
+    Alconna("monitor", Args["slug", AllParam]),
     aliases=("监视",),
     rule=is_enabled,
     permission=SUPERUSER | ADMIN(),
@@ -154,8 +154,8 @@ async def on_list_matches(mode: Query[str] = Query("mode", default="")):
 
 
 @check_match.handle()
-async def on_check_match(slug: Query[str] = Query("slug", default="")):
-    slug = slug.result.strip()
+async def on_check_match(slug: UniMessage):
+    slug = slug.extract_plain_text().strip()
 
     if not slug:
         await check_match.finish("用法：match <slug>\n"
@@ -171,15 +171,19 @@ async def on_check_match(slug: Query[str] = Query("slug", default="")):
         await check_match.finish(f"由于API调度故障，请求失败：{e}")
         matches = []  # 哄类型检查器
 
-    match = next(
-        (m for m in matches if m.get("slug") == slug),
-        None,
-    )
+    match, matched_by, team_hits = find_match(matches, slug)
 
     if match is None:
         await check_match.finish(f"未找到比赛：{slug}")
 
     match = cast(dict[str, Any], match)
+
+    if matched_by == "team" and team_hits > 1:
+        team_a, team_b = MatchParser.team_names(match)
+        await check_match.send(
+            f"⚠️ 未找到 slug「{slug}」，按战队名匹配到 {team_hits} 场比赛，"
+            f"此处展示第一个：{team_a} vs {team_b}"
+        )
 
     await check_match.finish(
         await typst_render(
@@ -190,10 +194,10 @@ async def on_check_match(slug: Query[str] = Query("slug", default="")):
 
 
 @monitor_match.handle()
-async def on_monitor_match(session: Uninfo, slug: Query[str] = Query("slug", default="")):
+async def on_monitor_match(session: Uninfo, slug: UniMessage):
     global monitor_client
 
-    slug = slug.result.strip().lower()
+    slug = slug.extract_plain_text().strip().lower()
 
     if not slug:
         await monitor_match.finish(
@@ -221,10 +225,7 @@ async def on_monitor_match(session: Uninfo, slug: Query[str] = Query("slug", def
         await monitor_match.finish(f"由于API调度故障，请求失败：{e}")
         matches = []  # 哄类型检查器
 
-    match = next(
-        (m for m in matches if m.get("slug", "").lower() == slug),
-        None,
-    )
+    match, matched_by, team_hits = find_match(matches, slug, slug_case_sensitive=False)
 
     if match is None:
         await monitor_match.finish(f"未找到比赛：{slug}")
@@ -233,8 +234,19 @@ async def on_monitor_match(session: Uninfo, slug: Query[str] = Query("slug", def
     if match.get("status", "unknown") in {"finished", "canceled"}:
         await monitor_match.finish(f"比赛已结束/取消，不可监视：{slug}")
 
-    monitor_client.add_monitor(slug, session.scene.id)
-    await monitor_match.finish(f"已开始监视比赛：{match.get('name', slug)}")
+    # 统一以比赛真实 slug 作为监视键：队名后备命中时尤其关键，
+    # 否则监视轮询按 slug 查找将永远找不到目标
+    monitor_slug = str(match.get("slug", slug)).lower()
+
+    if matched_by == "team" and team_hits > 1:
+        team_a, team_b = MatchParser.team_names(match)
+        await monitor_match.send(
+            f"⚠️ 未找到 slug「{slug}」，按战队名匹配到 {team_hits} 场比赛，"
+            f"将监视第一个：{team_a} vs {team_b}（slug: {monitor_slug}）"
+        )
+
+    monitor_client.add_monitor(monitor_slug, session.scene.id)
+    await monitor_match.finish(f"已开始监视比赛：{match.get('name', monitor_slug)}")
 
 
 @whitelist_config.handle()

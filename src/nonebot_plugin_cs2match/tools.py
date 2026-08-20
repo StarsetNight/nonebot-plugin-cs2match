@@ -329,6 +329,52 @@ class MonitorClient:
         )
 
 
+def find_match(
+    matches: list[dict[str, Any]],
+    query: str,
+    *,
+    slug_case_sensitive: bool = True,
+) -> tuple[dict[str, Any] | None, str, int]:
+    """在比赛列表中定位比赛。
+
+    优先按 slug 精确定位（沿用各调用方原有的大小写语义）；未命中时后备为
+    按战队名查找：将双方队名与查询串做大小写不敏感的整名精确匹配。
+
+    :param matches: 比赛列表（如 PandaScoreClient.list_matches 的结果）
+    :param query: 用户输入的查询串（建议已去除首尾空白）
+    :param slug_case_sensitive: slug 匹配是否区分大小写
+        （on_check_match 沿用 True，on_monitor_match 沿用 False）
+    :return: (match, matched_by, team_hit_count)
+        - match: 命中的比赛；未命中为 None
+        - matched_by: "slug" | "team" | ""（未命中）
+        - team_hit_count: 队名命中的比赛总数（仅队名后备命中时才有意义；
+          大于 1 时调用方应提示"匹配到多个，取第一个"）
+    """
+    # 1) slug 精确定位，沿用原有语义
+    if slug_case_sensitive:
+        hit = next((m for m in matches if m.get("slug") == query), None)
+    else:
+        hit = next((m for m in matches if m.get("slug", "").lower() == query), None)
+
+    if hit is not None:
+        return hit, "slug", 0
+
+    # 2) 队名后备：大小写不敏感的整名精确匹配，命中多个时取列表第一个
+    query_lower = query.lower()
+    team_hits = [
+        m for m in matches
+        if any(
+            (o.get("opponent") or {}).get("name", "").lower() == query_lower
+            for o in m.get("opponents") or []
+        )
+    ]
+
+    if team_hits:
+        return team_hits[0], "team", len(team_hits)
+
+    return None, "", 0
+
+
 class MatchParser:
     @staticmethod
     def parse(match: dict[str, Any]) -> dict[str, Any]:
@@ -375,6 +421,29 @@ class MatchParser:
             "score_b": score_b,
             "status": status,
         }
+
+    @staticmethod
+    def team_names(match: dict[str, Any]) -> tuple[str, str]:
+        """提取对阵双方队名（缺少对手信息时对应位置返回"未知"）。"""
+        opponents = match.get("opponents") or []
+
+        team_a = (
+            opponents[0]
+            .get("opponent", {})
+            .get("name", "未知")
+            if len(opponents) > 0
+            else "未知"
+        )
+
+        team_b = (
+            opponents[1]
+            .get("opponent", {})
+            .get("name", "未知")
+            if len(opponents) > 1
+            else "未知"
+        )
+
+        return team_a, team_b
 
     @classmethod
     def prerender_list(cls, matches: list[dict[str, Any]], priority_mode: str) -> str:
@@ -425,21 +494,7 @@ class MatchParser:
     def prerender_match(cls, match: dict[str, Any], comment: str = "") -> str:
         opponents = match.get("opponents") or []
 
-        team_a = (
-            opponents[0]
-            .get("opponent", {})
-            .get("name", "未知")
-            if len(opponents) > 0
-            else "未知"
-        )
-
-        team_b = (
-            opponents[1]
-            .get("opponent", {})
-            .get("name", "未知")
-            if len(opponents) > 1
-            else "未知"
-        )
+        team_a, team_b = cls.team_names(match)
 
         results = match.get("results") or []
 
