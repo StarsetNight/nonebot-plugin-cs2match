@@ -117,7 +117,7 @@ get_my_id = on_alconna(
 
 @get_help.handle()
 async def on_get_help():
-    await get_help.finish(await typst_render(help_text, "help"))
+    await get_help.finish(await typst_render(help_text))
 
 
 @list_matches.handle()
@@ -138,9 +138,6 @@ async def on_list_matches(mode: Query[str] = Query("mode", default="")):
 
     if func is None:
         func = client.list_matches
-        cache_key = "list_matches"
-    else:
-        cache_key = arg
 
     try:
         matches = await func()
@@ -151,8 +148,7 @@ async def on_list_matches(mode: Query[str] = Query("mode", default="")):
 
     await list_matches.finish(
         await typst_render(
-            MatchParser.prerender_list(matches, _config.config.priority_mode),
-            cache_key
+            MatchParser.prerender_list(matches, _config.config.priority_mode)
         )
     )
 
@@ -191,8 +187,7 @@ async def on_check_match(slug: UniMessage):
 
     await check_match.finish(
         await typst_render(
-            MatchParser.prerender_match(match),
-            "get_match",
+            MatchParser.prerender_match(match)
         )
     )
 

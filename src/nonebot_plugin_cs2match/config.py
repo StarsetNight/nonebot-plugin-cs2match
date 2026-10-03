@@ -20,3 +20,6 @@ class Config(BaseModel):
     cache_ttl: float = 60
     cache_max_size: int = 64
     MAX_MISSES: int = 10
+
+    render_cache_cleanup_interval: int = 60  # 清理的间隔，单位分钟
+    render_cache_renewal_duration: int = 30  # 缓存命中后续期的市场，单位分支

@@ -10,7 +10,7 @@ from asyncio import CancelledError, create_task, Task, to_thread, sleep, gather
 from typing import Any, cast
 from datetime import datetime
 from collections import defaultdict
-from binascii import crc32
+from hashlib import blake2s
 
 from aiohttp import ClientSession, ClientError, ClientTimeout
 from ayafileio import open
@@ -23,14 +23,22 @@ require("nonebot_plugin_alconna")
 from nonebot_plugin_alconna.uniseg import Image, UniMessage, Target
 from nonebot_plugin_localstore import get_plugin_cache_dir
 
-from . import template, config
-from .cache import func_ttl_cache, async_dedupe
+from . import template, config, driver
+from .cache import func_ttl_cache, single_flight, RenderCache
 
 RENDER_CACHE_DIR = get_plugin_cache_dir() / "render_cache"
 RENDER_CACHE_DIR.mkdir(exist_ok=True)
 
 _KNOWN_STATUS = {"not_started", "running", "finished", "canceled", "postponed"}
 _TERMINAL_STATUS = {"finished", "canceled"}
+
+render_cache: RenderCache | None = None
+
+
+@driver.on_startup()
+async def _():
+    global render_cache
+    render_cache = await RenderCache.create(RENDER_CACHE_DIR, RENDER_CACHE_DIR / "metadata")
 
 
 def _typst_str(value: Any) -> str:
@@ -60,28 +68,18 @@ def format_iso(iso: str) -> str:
     except ValueError:
         return "时间未知"
 
-@async_dedupe
-async def typst_render(typst_content: str, cache_key: str) -> Image:
-    cache_index = crc32(typst_content.encode("utf-8"))
+@single_flight
+async def typst_render(typst_content: str) -> Image:
+    assert render_cache is not None
 
-    cache_file_path = RENDER_CACHE_DIR / f"{cache_key}_{cache_index:08X}.png"
+    cache_key = blake2s(typst_content.encode("utf-8")).digest()
 
-    if cache_file_path.exists():
-        cache_file = open(cache_file_path, "rb")
-        cache_data = cast(bytes, await cache_file.readall())  # 我都二进制打开图像文件了怎么可能读出来str？
-        await cache_file.close()
-        return Image(raw=cache_data)
+    image_data = await render_cache.get_cache(cache_key)
+    if image_data is None:
+        image_data = await to_thread(_typst_render, typst_content)
+        await render_cache.add_cache(cache_key, image_data)
 
-    # 清理死缓存
-    for i in RENDER_CACHE_DIR.rglob(f"{cache_key}_*.png"):
-        i.unlink()
-
-    file_data = await to_thread(_typst_render, typst_content)
-    cache_file = open(cache_file_path, "wb")
-    await cache_file.write(file_data)
-    await cache_file.close()
-
-    return Image(raw=file_data)
+    return Image(raw=image_data)
 
 def _typst_render(typst_content: str) -> bytes:
     # 一般来说是不会输出多页的，所以干脆写个cast哄一下检查器了
@@ -569,7 +567,7 @@ class PandaScoreClient:
         )
         return past + running + upcoming
 
-    @async_dedupe
+    @single_flight
     @func_ttl_cache(MAXSIZE)
     async def list_past_matches(self) -> list[dict[str, Any]]:
         return [
@@ -577,7 +575,7 @@ class PandaScoreClient:
             if isinstance(m, dict) and m.get("videogame", {}).get("id") == 3
         ]
 
-    @async_dedupe
+    @single_flight
     @func_ttl_cache(MAXSIZE)
     async def list_running_matches(self) -> list[dict[str, Any]]:
         return [
@@ -585,7 +583,7 @@ class PandaScoreClient:
             if isinstance(m, dict) and m.get("videogame", {}).get("id") == 3
         ]
 
-    @async_dedupe
+    @single_flight
     @func_ttl_cache(MAXSIZE)
     async def list_upcoming_matches(self) -> list[dict[str, Any]]:
         return [
@@ -593,12 +591,12 @@ class PandaScoreClient:
             if isinstance(m, dict) and m.get("videogame", {}).get("id") == 3
         ]
 
-    @async_dedupe
+    @single_flight
     @func_ttl_cache(MAXSIZE)
     async def get_match(self, match_id: str) -> dict[str, Any]:
         return await self._get(f"/matches/{match_id}")
 
-    @async_dedupe
+    @single_flight
     @func_ttl_cache(MAXSIZE)
     async def get_match_score(self, match_id: str) -> dict[str, int] | None:
         match = await self.get_match(match_id)
@@ -620,7 +618,7 @@ class PandaScoreClient:
 
         return score
 
-    @async_dedupe
+    @single_flight
     @func_ttl_cache(MAXSIZE)
     async def get_teams(self, match_id: str) -> list[dict[str, Any]]:
         match = await self.get_match(match_id)
