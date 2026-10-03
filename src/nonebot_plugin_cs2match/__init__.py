@@ -27,7 +27,23 @@ from nonebot_plugin_uninfo import Uninfo, ADMIN, SceneType
 
 panda_client: PandaScoreClient | None = None
 dynamic_config: DynamicConfigSystem | None = None  # 取自插件内编写的DynamicConfigSystem
-monitor_client: MonitorClient | None = None
+# self_id -> 该Bot实例的比赛监视任务（按Bot隔离，避免多Bot串台/互相阻塞）
+monitor_clients: dict[str, MonitorClient] = {}
+
+
+def get_monitor_client(self_id: str, client: PandaScoreClient) -> MonitorClient:
+    """取得指定Bot实例的监视客户端（不存在则新建）。
+
+    同时兼具自愈：监视任务若已异常退出，这里会顺带重启它，
+    避免"任务静默死亡后再也没有监视"。
+    """
+    monitor = monitor_clients.get(self_id)
+    if monitor is None:
+        monitor = MonitorClient(client=client, self_id=self_id)
+        monitor_clients[self_id] = monitor
+    else:
+        monitor.start()
+    return monitor
 
 # 注册插件
 __plugin_meta__ = PluginMetadata(
@@ -65,11 +81,11 @@ async def on_startup_check():
 @driver.on_shutdown
 async def on_shutdown_cleanup():
     """关闭插件持有的连接与后台任务。"""
-    global monitor_client, panda_client
+    global panda_client
     try:
-        if monitor_client is not None:
-            await monitor_client.stop()
-            monitor_client = None
+        for monitor in list(monitor_clients.values()):
+            await monitor.stop()
+        monitor_clients.clear()
         if panda_client is not None:
             await panda_client.close()
             panda_client = None
@@ -162,7 +178,7 @@ async def on_check_match(slug: UniMessage):
     slug = slug.extract_plain_text().strip()
 
     if not slug:
-        await check_match.finish("用法：match <slug>\n"
+        await check_match.finish("用法：match <slug/队名>\n"
                                  "slug可在查询比赛列表的单个比赛左下角中找到。")
 
     client = cast(PandaScoreClient, panda_client)
@@ -199,13 +215,11 @@ async def on_check_match(slug: UniMessage):
 
 @monitor_match.handle()
 async def on_monitor_match(session: Uninfo, slug: UniMessage):
-    global monitor_client
-
     slug = slug.extract_plain_text().strip().lower()
 
     if not slug:
         await monitor_match.finish(
-            "用法：monitor <slug>\n"
+            "用法：monitor <slug/队名>\n"
             "取消监视：monitor cancel"
         )
 
@@ -214,13 +228,11 @@ async def on_monitor_match(session: Uninfo, slug: UniMessage):
 
     client = cast(PandaScoreClient, panda_client)  # 获取API的HTTP客户端
 
-    if monitor_client is None:
-        monitor_client = MonitorClient(client=client, self_id=session.self_id)
-    assert monitor_client is not None
-
-    # 取消当前群全部比赛监视
+    # 取消当前群全部比赛监视（没有监视任务时无需凭空创建一个）
     if slug == "cancel":
-        monitor_client.remove_monitor(group_id=session.scene.id)
+        existing = monitor_clients.get(session.self_id)
+        if existing is not None:
+            existing.remove_monitor(group_id=session.scene.id)
         await monitor_match.finish("已取消本群全部比赛监视。")
 
     try:
@@ -250,7 +262,16 @@ async def on_monitor_match(session: Uninfo, slug: UniMessage):
             f"将监视第一个：{team_a} vs {team_b}（slug: {monitor_slug}）"
         )
 
-    monitor_client.add_monitor(monitor_slug, session.scene.id)
+    monitor = get_monitor_client(session.self_id, client)
+
+    # 记录比赛ID：列表接口窗口之外的比赛，监视轮询会用它直查，确证比赛是否还存在
+    match_id = match.get("id")
+
+    monitor.add_monitor(
+        monitor_slug,
+        session.scene.id,
+        match_id if isinstance(match_id, int) else None,
+    )
     await monitor_match.finish(f"已开始监视比赛：{match.get('name', monitor_slug)}")
 
 
