@@ -5,15 +5,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Coroutine, Iterable
-from typing import ParamSpec, TypeVar
+from typing import Iterable
 from asyncio import CancelledError, create_task, Task, to_thread, sleep, gather
-from functools import wraps
-from typing import Any, cast, Callable
+from typing import Any, cast
 from datetime import datetime
-from collections import defaultdict, OrderedDict
+from collections import defaultdict
 from binascii import crc32
-from time import time
 
 from aiohttp import ClientSession, ClientError, ClientTimeout
 from ayafileio import open
@@ -27,13 +24,10 @@ from nonebot_plugin_alconna.uniseg import Image, UniMessage, Target
 from nonebot_plugin_localstore import get_plugin_cache_dir
 
 from . import template, config
+from .cache import func_ttl_cache, async_dedupe
 
 RENDER_CACHE_DIR = get_plugin_cache_dir() / "render_cache"
 RENDER_CACHE_DIR.mkdir(exist_ok=True)
-
-P = ParamSpec("P")
-T = TypeVar("T")
-AsyncFunc = Callable[P, Coroutine[Any, Any, T]]
 
 _KNOWN_STATUS = {"not_started", "running", "finished", "canceled", "postponed"}
 _TERMINAL_STATUS = {"finished", "canceled"}
@@ -47,56 +41,6 @@ def _typst_str(value: Any) -> str:
 def _safe_status(status: str) -> str:
     """把比赛状态归一化到模板中已定义的状态标识符。"""
     return status if status in _KNOWN_STATUS else "unknown"
-
-def async_dedupe(func: AsyncFunc[P, T]) -> AsyncFunc[P, T]:
-    tasks: dict[int, Task[T]] = {}
-    @wraps(func)
-    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-        nonlocal tasks
-        key = hash((args, tuple(sorted(kwargs.items()))))
-        if key in tasks:
-            return await tasks[key]
-        task = create_task(func(*args, **kwargs))
-        tasks[key] = task
-        try:
-            result = await task
-            return result
-        finally:
-            tasks.pop(key, None)
-    return wrapper
-
-CACHE_TTL = config.cache_ttl
-MAXSIZE = config.cache_max_size
-
-def func_ttl_cache(maxsize: int) -> Callable[[AsyncFunc[P, T]], AsyncFunc[P, T]]:
-    def _func_ttl_cache(func: AsyncFunc[P, T]) -> AsyncFunc[P, T]:
-        cache: OrderedDict[int, tuple[float, Any]] = OrderedDict()
-        maxsize_ = maxsize
-
-        @wraps(func)
-        async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-            nonlocal cache
-            key = hash((args, tuple(sorted(kwargs.items()))))
-            now = time()
-
-            if key in cache:
-                ttl, data = cache[key]
-                if ttl > now:
-                    cache.move_to_end(key)
-                    return data
-                del cache[key]
-
-            data = await func(*args, **kwargs)
-            cache[key] = (now + CACHE_TTL, data)
-
-            while len(cache) > maxsize_:
-                cache.popitem(last=False)
-
-            return data
-
-        return wrapper
-
-    return _func_ttl_cache
 
 
 def format_iso(iso: str) -> str:
