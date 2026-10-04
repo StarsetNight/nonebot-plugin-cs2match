@@ -10,6 +10,7 @@ from typing import ParamSpec, TypeVar
 from asyncio import CancelledError, create_task, Task, to_thread, sleep, gather
 from functools import wraps
 from typing import Any, cast, Callable
+from dataclasses import dataclass, field
 from datetime import datetime
 from collections import defaultdict, OrderedDict
 from binascii import crc32
@@ -27,6 +28,7 @@ from nonebot_plugin_alconna.uniseg import Image, UniMessage, Target
 from nonebot_plugin_localstore import get_plugin_cache_dir
 
 from . import template, config
+from .errors import PandaScoreApiError, PandaScoreNotFound
 
 RENDER_CACHE_DIR = get_plugin_cache_dir() / "render_cache"
 RENDER_CACHE_DIR.mkdir(exist_ok=True)
@@ -67,6 +69,27 @@ def async_dedupe(func: AsyncFunc[P, T]) -> AsyncFunc[P, T]:
 
 CACHE_TTL = config.cache_ttl
 MAXSIZE = config.cache_max_size
+# 连续多少轮"确证比赛已不存在"后自动取消监视；列表里查不到不计入
+MAX_MISSES = config.max_misses
+MATCH_PAGE_SIZE = config.match_page_size
+
+# 列表接口路径。CS2 数据归属 videogame id=3，/csgo/* 是官方给 CS 的专用入口
+# （一页里全是 CS 比赛，而不是"全游戏第一页里恰好属于 CS 的几场"）。
+# 若当前套餐不支持 /csgo/*（403/404），运行时自动回退到 _FALLBACK_MATCH_PATHS。
+_CS_MATCH_PATHS = {
+    "past": "/csgo/matches/past",
+    "running": "/csgo/matches/running",
+    "upcoming": "/csgo/matches/upcoming",
+}
+_FALLBACK_MATCH_PATHS = {
+    "past": "/matches/past",
+    "running": "/matches/running",
+    "upcoming": "/matches/upcoming",
+}
+
+# 监视服务异常时向群聊广播的节流间隔（秒），避免每轮刷屏
+FAILURE_NOTICE_INTERVAL = 1800.0
+
 
 def func_ttl_cache(maxsize: int) -> Callable[[AsyncFunc[P, T]], AsyncFunc[P, T]]:
     def _func_ttl_cache(func: AsyncFunc[P, T]) -> AsyncFunc[P, T]:
@@ -144,36 +167,95 @@ def _typst_render(typst_content: str) -> bytes:
     return cast(bytes, typst.compile(typst_content.encode(), format="png", ppi=144.0))
 
 
+@dataclass
+class MonitorTarget:
+    """一个被监视的比赛。
+
+    :param slug: 比赛 slug（小写，作为监视键）
+    :param match_id: 比赛 ID；用于在列表窗口之外按 ID 直查，确证比赛是否还存在
+    :param groups: 订阅该比赛的群场景ID集合
+    """
+
+    slug: str
+    match_id: int | None = None
+    groups: set[str] = field(default_factory=set)
+
+
 class MonitorClient:
     def __init__(self, client: PandaScoreClient, self_id: str):
         self.client: PandaScoreClient = client
         self.self_id: str = self_id
-        # slug -> 群场景ID集合
-        self.monitors: dict[str, set[str]] = {}
+        # slug -> 监视目标
+        self.monitors: dict[str, MonitorTarget] = {}
         # slug -> 最近一次比赛数据
         self.matches: dict[str, dict[str, Any]] = {}
-        # slug -> 连续轮询未发现次数
+        # slug -> 连续“确证比赛不存在”的次数
         self.miss_count: dict[str, int] = {}
-        self.task: Task = create_task(self.monitor_loop())
+        # 上次广播"监视服务异常"的时间戳（节流用）
+        self._last_failure_notice: float = 0.0
+        self.task: Task[None] | None = None
+        self.start()
 
 
-    def add_monitor(self, slug: str, group_id: str):
-        self.monitors.setdefault(slug, set()).add(group_id)
+    def add_monitor(self, slug: str, group_id: str, match_id: int | None = None) -> None:
+        target = self.monitors.get(slug)
+        if target is None:
+            target = MonitorTarget(slug=slug, match_id=match_id)
+            self.monitors[slug] = target
+        elif match_id is not None:
+            target.match_id = match_id
+        target.groups.add(group_id)
+        # 重新监视时清空历史计数，避免残留的 miss 让刚加上的监视立刻被取消
+        self.miss_count.pop(slug, None)
+        # 任务若已异常退出，这里顺带重启，避免"监视静默失效"
+        self.start()
 
 
-    def remove_monitor(self, group_id: str):
-        for (_, groups) in self.monitors.items():
-            groups.discard(group_id)
+    def remove_monitor(self, group_id: str) -> None:
+        # 快照迭代：本方法可能在监视轮询的 await 期间被调用
+        for slug in list(self.monitors):
+            target = self.monitors[slug]
+            target.groups.discard(group_id)
+            if not target.groups:
+                del self.monitors[slug]
+                self.matches.pop(slug, None)
+                self.miss_count.pop(slug, None)
 
-        self.monitors = {
-            k: v for k, v in self.monitors.items() if v
-        }
+
+    def start(self) -> None:
+        """确保监视循环处于运行状态（幂等）。"""
+        task = self.task
+        if task is not None and not task.done():
+            return
+        if task is not None:
+            logger.warning("检测到比赛监视任务已停止，正在重新启动")
+        self.task = create_task(self.monitor_loop())
+        assert self.task is not None
+        self.task.add_done_callback(self._on_task_done)
+
+
+    @staticmethod
+    def _on_task_done(task: Task[None]) -> None:
+        """任务退出时记录原因：否则监视停止将完全静默。"""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None:
+            logger.error("比赛监视任务意外结束（协程未被取消，且未抛出异常信息），监视已停止工作")
+        else:
+            logger.opt(exception=exc).error("比赛监视任务异常退出，监视已停止工作")
 
 
     async def stop(self) -> None:
         """停止后台监视任务，供插件关闭时调用。"""
         task = self.task
-        if task is None or task.done():
+        self.task = None
+        if task is None:
+            return
+        if task.done():
+            # 已结束：取回异常，避免 "Task exception was never retrieved"
+            if not task.cancelled():
+                task.exception()
             return
         task.cancel()
         try:
@@ -182,130 +264,249 @@ class MonitorClient:
             pass
 
 
-    async def monitor_loop(self):
+    async def monitor_loop(self) -> None:
+        logger.info(f"比赛监视服务已启动（Bot {self.self_id}）")
         while True:
             try:
-                if not self.monitors:
-                    await sleep(CACHE_TTL)
-                    continue
-
-                try:
-                    bot = get_bot(self.self_id)
-                except ValueError:
-                    logger.warning(f"监视推送失败：找不到Bot实例（{self.self_id}）")
-                    await sleep(CACHE_TTL)
-                    continue
-
-                # 三个接口分别容错：单个接口失败不影响本轮其它比赛的检测
-                results = await gather(
-                    self.client.list_past_matches(),
-                    self.client.list_running_matches(),
-                    self.client.list_upcoming_matches(),
-                    return_exceptions=True,
-                )
-                matches: list[dict[str, Any]] = []
-                failed = 0
-                for r in results:
-                    if isinstance(r, BaseException):
-                        failed += 1
-                        logger.warning(f"监视轮询接口请求失败：{type(r).__name__}: {r}")
-                    else:
-                        # 有病吧？我都isinstance完了你静态检查器还在这执迷不悟
-                        r = cast(Iterable[dict[str, Any]], r)
-                        matches.extend(r)
-                if failed == 3:
-                    logger.warning("监视轮询所有接口均失败，本轮跳过")
-                    await sleep(CACHE_TTL)
-                    continue
-
-                finished_slugs: list[str] = []
-
-                for slug, groups in self.monitors.items():
-                    current = next(
-                        (m for m in matches if m.get("slug", "").lower() == slug),
-                        None
-                    )
-
-                    if current is None:
-                        # 可能处于"比赛结束但past接口尚未索引"的窗口期，也可能已被删除
-                        if failed > 0:
-                            # 本轮部分接口失败，数据不完整："目标消失"不可信，不计数
-                            continue
-                        misses = self.miss_count.get(slug, 0) + 1
-                        self.miss_count[slug] = misses
-                        if misses >= config.MAX_MISSES:
-                            logger.warning(f"监控目标长时间消失，取消监视：{slug}")
-                            finished_slugs.append(slug)
-                            for group_id in groups:
-                                try:
-                                    await UniMessage(
-                                        ">监控目标长时间未出现，已自动取消监视<\n"
-                                        "比赛可能已被删除。"
-                                    ).send(target=Target.group(group_id), bot=bot)
-                                except Exception as e:
-                                    logger.exception(f"取消监视通知因 {e} 发送失败：{slug}")
-                        else:
-                            logger.warning(f"监控目标消失：{slug}（第{misses}/{config.MAX_MISSES}次）")
-                        continue
-
-                    self.miss_count.pop(slug, None)
-
-                    try:
-                        old = self.matches.get(slug)
-
-                        if self.should_notify(old, current):
-                            logger.info(f"比赛发生变化：{slug}")
-
-                            comment = (
-                                "比赛已结束，自动监视已取消。"
-                                if old is None
-                                else template.push_comment
-                            )
-
-                            message = await typst_render(
-                                MatchParser.prerender_match(current, comment),
-                                "monitor"
-                            )
-
-                            for group_id in groups:
-                                await UniMessage(message).send(
-                                    target=Target.group(group_id), bot=bot
-                                )
-                    except Exception as e:
-                        logger.exception(f"监视因 {e} 推送失败：{slug}")
-                        continue
-
-                    self.matches[slug] = current
-
-                    if current.get("status") in _TERMINAL_STATUS:
-                        logger.info(f"比赛已结束/取消，停止监控：{slug}")
-                        finished_slugs.append(slug)
-
-                # 循环结束后统一移除，避免迭代中修改字典
-                for slug in finished_slugs:
-                    self.monitors.pop(slug, None)
-                    self.matches.pop(slug, None)
-                    self.miss_count.pop(slug, None)
-
+                if self.monitors:
+                    await self._run_round()
             except CancelledError:
                 logger.info("比赛监视服务已停止")
                 raise
             except Exception as e:
-                try:
-                    bot = get_bot(self.self_id)
-                except ValueError:
-                    bot = None
-                for groups in self.monitors.values():
-                    logger.exception("比赛监视服务异常")
-                    for group_id in groups:
-                        if bot is not None:
-                            await UniMessage(
-                                f">比赛监视服务异常<\n"
-                                f"错误：{type(e).__name__}\n"
-                                f"详情请管理员查看日志，\n"
-                                f"如再次看到此消息，请取消监视。"
-                            ).send(target=Target.group(group_id), bot=bot)
+                # 兜底：任何异常都只记录+通知，绝不允许逃出循环（逃出去=监视静默死亡）
+                logger.opt(exception=e).error("比赛监视服务异常")
+                await self._notify_failure(e)
             await sleep(CACHE_TTL)
+
+
+    async def _run_round(self) -> None:
+        bot = self._get_bot()
+        if bot is None:
+            logger.warning(f"监视推送失败：找不到Bot实例（{self.self_id}）")
+            return
+
+        matches, failed = await self._collect_matches()
+        if failed >= 3:
+            logger.warning("监视轮询所有接口均失败，本轮跳过")
+            return
+
+        by_slug: dict[str, dict[str, Any]] = {}
+        for match in matches:
+            match_slug = match.get("slug")
+            if isinstance(match_slug, str):
+                # 同一场比赛可能同时出现在running/past：保持"首个命中优先"的原有语义
+                by_slug.setdefault(match_slug.lower(), match)
+
+        finished_slugs: list[str] = []
+
+        # 快照迭代：轮询期间可能有 /monitor、/monitor cancel 并发修改容器
+        for slug, target in list(self.monitors.items()):
+            try:
+                await self._check_target(bot, target, by_slug.get(slug), failed, finished_slugs)
+            except CancelledError:
+                raise
+            except Exception as e:
+                # 单个目标出问题不影响本轮其它目标
+                logger.opt(exception=e).error(f"监视目标处理失败，本轮跳过：{slug}")
+
+        # 循环结束后统一移除，避免迭代中修改字典
+        for slug in finished_slugs:
+            self.monitors.pop(slug, None)
+            self.matches.pop(slug, None)
+            self.miss_count.pop(slug, None)
+
+
+    def _get_bot(self) -> Any | None:
+        """取得该 self_id 对应的Bot实例，取不到返回 None。
+
+        注意：nonebot.get_bot(self_id) 在"该 self_id 的Bot未连接"时抛的是 KeyError
+        （而不是 ValueError）。只捕获 ValueError 会让 Bot 一掉线就炸穿整个监视循环。
+        """
+        try:
+            return get_bot(self.self_id)
+        except (ValueError, KeyError):
+            return None
+
+
+    async def _collect_matches(self) -> tuple[list[dict[str, Any]], int]:
+        """并行拉取三个列表接口：单个接口失败不影响本轮其它比赛的检测。"""
+        results = await gather(
+            self.client.list_past_matches(),
+            self.client.list_running_matches(),
+            self.client.list_upcoming_matches(),
+            return_exceptions=True,
+        )
+        matches: list[dict[str, Any]] = []
+        failed = 0
+        for r in results:
+            if isinstance(r, BaseException):
+                failed += 1
+                logger.warning(f"监视轮询接口请求失败：{type(r).__name__}: {r}")
+            else:
+                # 有病吧？我都isinstance完了你静态检查器还在这执迷不悟
+                matches.extend(cast(Iterable[dict[str, Any]], r))
+        return matches, failed
+
+
+    async def _resolve_target(
+        self,
+        target: MonitorTarget,
+        listed: dict[str, Any] | None,
+        failed: int,
+    ) -> tuple[dict[str, Any] | None, str]:
+        """定位被监视的比赛。
+
+        列表接口只覆盖"当前一页窗口"，比赛掉出窗口并不代表它消失了；
+        因此列表中查不到时，再用单场比赛接口按ID确证一次。
+
+        :return: (比赛数据, 状态)
+            - "found"：已取得比赛数据（列表命中或单场接口命中）
+            - "missing"：确证比赛不存在（单场接口404）
+            - "unknown"：无法确证（接口异常、缺少比赛ID或本轮列表不完整）
+        """
+        if listed is not None:
+            return listed, "found"
+
+        if failed > 0:
+            # 本轮列表数据不完整，"找不到"不可信
+            return None, "unknown"
+
+        if target.match_id is None:
+            logger.warning(f"监视目标不在列表窗口中且缺少比赛ID，无法确证：{target.slug}")
+            return None, "unknown"
+
+        try:
+            return await self.client.get_match(str(target.match_id)), "found"
+        except PandaScoreNotFound:
+            return None, "missing"
+        except CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(
+                f"单场比赛查询失败，本轮不判定监视目标消失："
+                f"{target.slug}：{type(e).__name__}: {e}"
+            )
+            return None, "unknown"
+
+
+    async def _check_target(
+        self,
+        bot: Any,
+        target: MonitorTarget,
+        listed: dict[str, Any] | None,
+        failed: int,
+        finished_slugs: list[str],
+    ) -> None:
+        slug = target.slug
+        current, state = await self._resolve_target(target, listed, failed)
+
+        if state == "unknown":
+            return
+
+        if state == "missing":
+            misses = self.miss_count.get(slug, 0) + 1
+            self.miss_count[slug] = misses
+            if misses < MAX_MISSES:
+                logger.warning(f"监控目标已不存在：{slug}（第{misses}/{MAX_MISSES}次）")
+                return
+            logger.warning(f"监控目标已被删除，取消监视：{slug}")
+            finished_slugs.append(slug)
+            for group_id in list(target.groups):
+                await self._notify_group(
+                    bot, group_id,
+                    ">监视目标已从数据中心删除，已自动取消监视<\n"
+                    "比赛可能已被移除。",
+                )
+            return
+
+        current = cast(dict[str, Any], current)
+        self.miss_count.pop(slug, None)
+
+        try:
+            old = self.matches.get(slug)
+
+            if self.should_notify(old, current):
+                logger.info(f"比赛发生变化：{slug}")
+
+                comment = (
+                    "比赛已结束，自动监视已取消。"
+                    if old is None
+                    else template.push_comment
+                )
+
+                message = await typst_render(
+                    MatchParser.prerender_match(current, comment),
+                    "monitor"
+                )
+
+                delivered = True
+                for group_id in list(target.groups):
+                    if not await self._notify_group(bot, group_id, message):
+                        delivered = False
+                if not delivered:
+                    # 保留旧状态，下一轮重新检测并重试推送
+                    logger.warning(f"监视推送未全部送达，保留旧状态以便重试：{slug}")
+                    return
+        except CancelledError:
+            raise
+        except Exception as e:
+            logger.opt(exception=e).error(f"监视因 {e} 推送失败：{slug}")
+            return
+
+        if slug not in self.monitors:
+            # 推送期间该比赛已被取消监视（/monitor cancel），不再记录状态
+            return
+
+        self.matches[slug] = current
+
+        if current.get("status") in _TERMINAL_STATUS:
+            logger.info(f"比赛已结束/取消，停止监控：{slug}")
+            finished_slugs.append(slug)
+
+
+    @staticmethod
+    async def _notify_group(bot: Any, group_id: str, message: Any) -> bool:
+        """向单个群推送消息。
+
+        推送失败只记录日志，绝不允许推送异常影响监视循环本身。
+        :return: 是否送达
+        """
+        try:
+            await UniMessage(message).send(target=Target.group(group_id), bot=bot)
+            return True
+        except CancelledError:
+            raise
+        except Exception as e:
+            logger.opt(exception=e).error(f"监视推送失败：{group_id}")
+            return False
+
+
+    async def _notify_failure(self, error: BaseException) -> None:
+        """监视服务异常时向所有订阅群广播（节流，且内部完全兜底）。"""
+        try:
+            now = time()
+            if now - self._last_failure_notice < FAILURE_NOTICE_INTERVAL:
+                return
+            self._last_failure_notice = now
+
+            bot = self._get_bot()
+            if bot is None:
+                return
+
+            for target in list(self.monitors.values()):
+                for group_id in list(target.groups):
+                    await self._notify_group(
+                        bot, group_id,
+                        ">比赛监视服务异常<\n"
+                        f"错误：{type(error).__name__}\n"
+                        f"详情请管理员查看日志，\n"
+                        f"如再次看到此消息，请取消监视。"
+                    )
+        except CancelledError:
+            raise
+        except Exception as e:
+            logger.opt(exception=e).error("发送监视异常通知时再次失败")
 
 
 
@@ -590,8 +791,6 @@ class MatchParser:
         return 0
 
 
-
-
 class PandaScoreClient:
     def __init__(self, token: str) -> None:
         self.base = "https://api.pandascore.co"
@@ -599,20 +798,68 @@ class PandaScoreClient:
             "Authorization": f"Bearer {token}"
         }
         self.session = ClientSession(timeout=ClientTimeout(total=config.client_timeout))
+        # 套餐不支持 /csgo/* 时自动回退到全游戏接口（只回退一次）
+        self.use_cs_endpoints = True
 
     async def close(self) -> None:
         """关闭底层 aiohttp 会话，释放连接池资源。"""
         if self.session is not None and not self.session.closed:
             await self.session.close()
 
-    async def _get(self, path, params=None) -> Any:
+    async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        """发起 GET 请求并检查状态码。
+
+        注意：必须显式检查 HTTP 状态码。PandaScore 的错误响应体也是 JSON，
+        直接 resp.json() 既不抛异常、也不是列表，会被上层误判成"接口成功但没有比赛"，
+        进而把所有监视目标都算成"已消失"。
+        """
         url = f"{self.base}{path}"
         try:
             async with self.session.get(url, headers=self.headers, params=params) as resp:
+                if resp.status == 404:
+                    raise PandaScoreNotFound(url)
+                if resp.status >= 400:
+                    raise PandaScoreApiError(url, resp.status, await resp.text())
                 return await resp.json()
         except (ClientError, TimeoutError, asyncio.TimeoutError) as e:
             logger.warning(f"请求失败：{url}：{e}")
             raise
+
+    async def _get_list(
+        self, path: str, params: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        """发起 GET 请求，并断言响应确实是列表。"""
+        data = await self._get(path, params)
+        if not isinstance(data, list):
+            raise PandaScoreApiError(
+                f"{self.base}{path}", 200,
+                f"响应结构异常：期望 list，实际 {type(data).__name__}",
+            )
+        return [m for m in data if isinstance(m, dict)]
+
+    async def _list_matches_by_kind(self, kind: str) -> list[dict[str, Any]]:
+        """按 past/running/upcoming 拉取比赛列表。
+
+        优先使用 CS 专用接口（一页里全是 CS 比赛，而不是"全游戏第一页里恰好属于CS的几场"）；
+        若当前套餐不支持，则永久回退到全游戏接口并在本地按 videogame.id == 3 过滤。
+
+        注意：监视的正确性不依赖这里的窗口大小——窗口之外的比赛由 MonitorClient
+        按比赛ID直查兜底；这里只决定"窗口内能不能顺手看到"。
+        """
+        params = {"page[size]": MATCH_PAGE_SIZE}
+        if self.use_cs_endpoints:
+            try:
+                return await self._get_list(_CS_MATCH_PATHS[kind], params)
+            except PandaScoreApiError as e:
+                if e.status not in (403, 404):
+                    raise
+                self.use_cs_endpoints = False
+                logger.warning(
+                    f"当前套餐不可用 {_CS_MATCH_PATHS[kind]}（HTTP {e.status}），"
+                    f"已回退到全游戏比赛接口 {_FALLBACK_MATCH_PATHS[kind]}"
+                )
+        data = await self._get_list(_FALLBACK_MATCH_PATHS[kind], params)
+        return [m for m in data if (m.get("videogame") or {}).get("id") == 3]
 
     async def list_matches(self) -> list[dict[str, Any]]:
         """
@@ -628,26 +875,17 @@ class PandaScoreClient:
     @async_dedupe
     @func_ttl_cache(MAXSIZE)
     async def list_past_matches(self) -> list[dict[str, Any]]:
-        return [
-            m for m in await self._get("/matches/past")
-            if isinstance(m, dict) and m.get("videogame", {}).get("id") == 3
-        ]
+        return await self._list_matches_by_kind("past")
 
     @async_dedupe
     @func_ttl_cache(MAXSIZE)
     async def list_running_matches(self) -> list[dict[str, Any]]:
-        return [
-            m for m in await self._get("/matches/running")
-            if isinstance(m, dict) and m.get("videogame", {}).get("id") == 3
-        ]
+        return await self._list_matches_by_kind("running")
 
     @async_dedupe
     @func_ttl_cache(MAXSIZE)
     async def list_upcoming_matches(self) -> list[dict[str, Any]]:
-        return [
-            m for m in await self._get("/matches/upcoming")
-            if isinstance(m, dict) and m.get("videogame", {}).get("id") == 3
-        ]
+        return await self._list_matches_by_kind("upcoming")
 
     @async_dedupe
     @func_ttl_cache(MAXSIZE)
