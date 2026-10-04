@@ -98,10 +98,13 @@ class RenderCache:
         self.metadata_db = await KvDB.open(self.metadata_db_path)
         return self
 
-    def _delete_file(self, name: str):
+    def _delete_file(self, name: str) -> int:
         path = self.cache_path / name
+        size = 0
         if path.exists() and path.is_file():
+            size = path.stat().st_size
             path.unlink()
+        return size
 
     @staticmethod
     def _on_cleanup_done(task: Task[None]) -> None:
@@ -122,12 +125,14 @@ class RenderCache:
 
         res = await self.metadata_db.contains(key)
         if not res:
+            logger.debug(f"{key.hex()} 缓存未命中")
             return None
 
         new_expire = _get_time() + (config.render_cache_renewal_duration * 60)
 
-        cache_data_path = self.cache_path / f"{key.hex().lower()}.jpg"
+        cache_data_path = self.cache_path / f"{key.hex().lower()}.png"
         if not cache_data_path.exists() or not cache_data_path.is_file():
+            logger.warning(f"{key.hex()} 缓存读取中出现异常，对应数据不存在")
             await self.metadata_db.delete(key)
             return None
 
@@ -136,21 +141,28 @@ class RenderCache:
 
         await self.metadata_db.set(key, _dump_time(new_expire))
 
+        logger.debug(f"{key.hex()} 缓存命中")
+
         return cache_data
 
     async def add_cache(self, key: bytes, data: bytes):
         assert self.metadata_db is not None
 
-        cache_file_path = self.cache_path / f"{key.hex().lower()}.jpg"
+        cache_file_path = self.cache_path / f"{key.hex().lower()}.png"
 
         async with ayafileio.open(cache_file_path, "wb") as f:
             await f.write(data)
 
         expire = _get_time() + (config.render_cache_renewal_duration * 60)
+
+        logger.debug(f"{key.hex()} 加入缓存，数据大小：{format_bytes(len(data))}")
+
         await self.metadata_db.set(key, _dump_time(expire))
 
     async def cleanup(self):
         assert self.metadata_db is not None
+
+        logger.debug(f"开始缓存清理")
 
         if self.clearing:
             return
@@ -160,6 +172,7 @@ class RenderCache:
             await self._cleanup()
         finally:
             self.clearing = False
+            logger.debug(f"缓存清理完成")
         return
 
     async def _cleanup(self):
@@ -167,7 +180,7 @@ class RenderCache:
 
         all_cache_file = [
             p for p in self.cache_path.iterdir()
-            if p.is_file() and p.suffix == '.jpg'
+            if p.is_file() and p.suffix == '.png'
         ]
 
         all_cache_metadata = await self.metadata_db.items()
@@ -179,13 +192,43 @@ class RenderCache:
             if p.stem.lower() not in all_key
         ]
 
+        if len(missing_metadata_files) > 0:
+            logger.debug(f"元数据缺失的缓存数量: {len(missing_metadata_files)}")
+
         # 删除不在元信息数据库里的缓存文件
+        data_length = 0
         for i in missing_metadata_files:
-            self._delete_file(i.name)
+            data_length += self._delete_file(i.name)
+
+        if len(missing_metadata_files) > 0:
+            logger.debug(f"删除元数据缺失的缓存大小: {format_bytes(data_length)}")
 
         # 清理过期的
+        data_length = 0
+        expired_count = 0
         for k, v in all_cache_metadata:
             expire = _load_time(v)
             if _get_time() > expire:
                 await self.metadata_db.delete(k)
-                self._delete_file(f"{k.hex().lower()}.jpg")
+                data_length += self._delete_file(f"{k.hex().lower()}.png")
+                expired_count += 1
+
+        if expired_count > 0:
+            logger.debug(f"过期缓存数量: {expired_count}")
+            logger.debug(f"清理缓存大小: {format_bytes(data_length)}")
+
+
+def format_bytes(num_bytes: int) -> str:
+    units = ["B", "KB", "MB", "GB"]
+    value = float(num_bytes)
+    unit_index = 0
+
+    while unit_index < len(units) - 1 and value / 1024 >= 1:
+        value /= 1024
+        unit_index += 1
+
+    if unit_index == 0:
+        return f"{int(value)} {units[unit_index]}"
+    else:
+        return f"{value:.2f} {units[unit_index]}"
+
