@@ -157,6 +157,12 @@ cython_debug/
 # ruff
 .ruff_cache/
 
+# uv缓存
+.uv-cache/
+
+# 脱机单元测试文件
+tests/
+
 # LSP config files
 pyrightconfig.json
 

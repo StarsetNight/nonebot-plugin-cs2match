@@ -1,3 +1,6 @@
+# Copyright (c) 2026 StarsetNight, XuanRikka
+# SPDX-License-Identifier: MIT
+
 import aiosqlite
 from pathlib import Path
 from typing import AsyncIterator, Mapping
@@ -27,6 +30,7 @@ class KvDB:
     async def open(cls, path: str | Path) -> "KvDB":
         self = cls(path)
         self._cx = await aiosqlite.connect(self._path, isolation_level=None)
+        assert self._cx is not None
         try:
             await self._cx.execute("PRAGMA journal_mode = wal")
         except aiosqlite.OperationalError:
@@ -49,12 +53,11 @@ class KvDB:
         await cu.close()
         return None if row is None else row[0]
 
-    async def delete(self, key: bytes) -> None:
+    async def delete(self, key: bytes) -> bool:
         cu = await self._execute(DELETE_KEY, (key,))
         n = cu.rowcount
         await cu.close()
-        if n == 0:
-            raise KeyError(key)
+        return n != 0  # 返回删除的键是否存在
 
     async def contains(self, key: bytes) -> bool:
         cu = await self._execute(LOOKUP_KEY, (key,))

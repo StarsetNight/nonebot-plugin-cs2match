@@ -1,3 +1,6 @@
+# Copyright (c) 2026 StarsetNight, XuanRikka
+# SPDX-License-Identifier: MIT
+
 from __future__ import annotations
 
 from typing import ParamSpec, TypeVar, Coroutine, Any, Callable, cast
@@ -6,9 +9,10 @@ from functools import wraps
 from collections import OrderedDict
 from time import time
 from pathlib import Path
-from hashlib import blake2s
 
 import ayafileio
+
+from nonebot import logger
 
 from . import config
 from .db import KvDB
@@ -99,12 +103,22 @@ class RenderCache:
         if path.exists() and path.is_file():
             path.unlink()
 
+    @staticmethod
+    def _on_cleanup_done(task: Task[None]) -> None:
+        """取回后台清理任务的异常：否则失败会静默，只等 GC 时由 asyncio 报一条无上下文的日志。"""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.warning(f"渲染缓存清理失败，本轮跳过，下个周期重试：{type(exc).__name__}: {exc}")
+
     async def get_cache(self, key: bytes) -> None | bytes:
         assert self.metadata_db is not None
 
         if _get_time() > self.next_cleanup_time:
             self.next_cleanup_time = _get_time() + config.render_cache_cleanup_interval * 60
             self.cleanup_task = create_task(self.cleanup())
+            self.cleanup_task.add_done_callback(self._on_cleanup_done)
 
         res = await self.metadata_db.contains(key)
         if not res:

@@ -15,7 +15,6 @@ from hashlib import blake2s
 from time import time
 
 from aiohttp import ClientSession, ClientError, ClientTimeout
-from ayafileio import open
 import typst
 
 from nonebot import require, logger, get_bot
@@ -27,7 +26,7 @@ from nonebot_plugin_localstore import get_plugin_cache_dir
 
 from . import template, config, driver
 from .errors import PandaScoreApiError, PandaScoreNotFound
-from .cache import func_ttl_cache, single_flight, RenderCache
+from .cache import func_ttl_cache, single_flight, RenderCache, CACHE_TTL, MAXSIZE
 
 RENDER_CACHE_DIR = get_plugin_cache_dir() / "render_cache"
 RENDER_CACHE_DIR.mkdir(exist_ok=True)
@@ -35,10 +34,31 @@ RENDER_CACHE_DIR.mkdir(exist_ok=True)
 _KNOWN_STATUS = {"not_started", "running", "finished", "canceled", "postponed"}
 _TERMINAL_STATUS = {"finished", "canceled"}
 
+# 连续多少轮"确证比赛已不存在"后自动取消监视；列表里查不到不计入
+MAX_MISSES = config.max_misses
+MATCH_PAGE_SIZE = config.match_page_size
+
+# 列表接口路径。CS2 数据归属 videogame id=3，/csgo/* 是官方给 CS 的专用入口
+# （一页里全是 CS 比赛，而不是"全游戏第一页里恰好属于 CS 的几场"）。
+# 若当前套餐不支持 /csgo/*（403/404），运行时自动回退到 _FALLBACK_MATCH_PATHS。
+_CS_MATCH_PATHS = {
+    "past": "/csgo/matches/past",
+    "running": "/csgo/matches/running",
+    "upcoming": "/csgo/matches/upcoming",
+}
+_FALLBACK_MATCH_PATHS = {
+    "past": "/matches/past",
+    "running": "/matches/running",
+    "upcoming": "/matches/upcoming",
+}
+
+# 监视服务异常时向群聊广播的节流间隔（秒），避免每轮刷屏
+FAILURE_NOTICE_INTERVAL = 1800.0
+
 render_cache: RenderCache | None = None
 
 
-@driver.on_startup()
+@driver.on_startup
 async def _():
     global render_cache
     render_cache = await RenderCache.create(RENDER_CACHE_DIR, RENDER_CACHE_DIR / "metadata")
@@ -357,8 +377,7 @@ class MonitorClient:
                 )
 
                 message = await typst_render(
-                    MatchParser.prerender_match(current, comment),
-                    "monitor"
+                    MatchParser.prerender_match(current, comment)
                 )
 
                 delivered = True

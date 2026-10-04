@@ -14,7 +14,6 @@ class Config(BaseModel):
         ("esl", 80, ["esl"]),
         ("pgl", 70, ["pgl"]),
         ("cac", 60, ["cac"]),
-        ("ewc", 50, ["esports world cup"]),
     ]  # 赛事系列，优先级，匹配赛事名称（小写）
     client_timeout: int = 10
     cache_ttl: float = 60
@@ -24,4 +23,4 @@ class Config(BaseModel):
     # 列表接口查不到并不代表比赛消失（分页窗口会滑动），因此只有404才计数。
     max_misses: int = 3
     render_cache_cleanup_interval: int = 60  # 清理的间隔，单位分钟
-    render_cache_renewal_duration: int = 30  # 缓存命中后续期的市场，单位分支
+    render_cache_renewal_duration: int = 30  # 缓存命中后的续期时长，单位分钟

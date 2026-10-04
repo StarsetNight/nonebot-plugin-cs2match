@@ -1,3 +1,6 @@
+# Copyright (c) 2026 StarsetNight, XuanRikka
+# SPDX-License-Identifier: MIT
+
 class PandaScoreError(Exception):
     """PandaScore 接口调用失败。"""
 
