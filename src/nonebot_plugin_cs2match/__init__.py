@@ -13,7 +13,7 @@ from .config import Config
 driver = get_driver()
 global_config = driver.config
 config = get_plugin_config(Config)  # 取自config.py中的静态配置
-from .tools import PandaScoreClient, MonitorClient, MatchParser, typst_render, find_match
+from .tools import PandaScoreClient, MonitorClient, MatchParser, typst_render, find_match, typst_render_for_stable_cache
 from .template import help_plain_text, help_text
 from .rule import is_enabled
 from .dynamic_config import DynamicConfigSystem, PriorityMode
@@ -133,7 +133,7 @@ get_my_id = on_alconna(
 
 @get_help.handle()
 async def on_get_help():
-    await get_help.finish(await typst_render(help_text))
+    await get_help.finish(await typst_render_for_stable_cache(help_text, "help"))
 
 
 @list_matches.handle()

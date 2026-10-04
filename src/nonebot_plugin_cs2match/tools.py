@@ -14,6 +14,7 @@ from collections import defaultdict
 from hashlib import blake2s
 from time import time
 
+import ayafileio
 from aiohttp import ClientSession, ClientError, ClientTimeout
 import typst
 
@@ -30,6 +31,8 @@ from .cache import func_ttl_cache, single_flight, RenderCache, CACHE_TTL, MAXSIZ
 
 RENDER_CACHE_DIR = get_plugin_cache_dir() / "render_cache"
 RENDER_CACHE_DIR.mkdir(exist_ok=True)
+STABLE_RENDER_CACHE_DIR = RENDER_CACHE_DIR / "stable_cache"
+STABLE_RENDER_CACHE_DIR.mkdir(exist_ok=True)
 
 _KNOWN_STATUS = {"not_started", "running", "finished", "canceled", "postponed"}
 _TERMINAL_STATUS = {"finished", "canceled"}
@@ -61,7 +64,8 @@ render_cache: RenderCache | None = None
 @driver.on_startup
 async def _():
     global render_cache
-    render_cache = await RenderCache.create(RENDER_CACHE_DIR, RENDER_CACHE_DIR / "metadata")
+    render_cache = await RenderCache.create(RENDER_CACHE_DIR / "ttl_render_cache", RENDER_CACHE_DIR / "metadata.db")
+    await render_cache.cleanup()
 
 def _typst_str(value: Any) -> str:
     """把任意值转成安全的 typst 字符串字面量，防止 API 数据破坏模板。"""
@@ -89,6 +93,37 @@ def format_iso(iso: str) -> str:
 
     except ValueError:
         return "时间未知"
+
+@single_flight
+async def typst_render_for_stable_cache(typst_content: str, index_key: str) -> Image:
+    """
+    专门用来解决help这种不容易变动的缓存
+    话说这名字也太长了，谁想的
+    """
+    key = blake2s(typst_content.encode("utf-8"))
+    file_name = f"{index_key}_{key.hexdigest()}.png"
+    cache_file_path = STABLE_RENDER_CACHE_DIR / file_name
+
+    if cache_file_path.exists() and cache_file_path.is_file():
+        f = ayafileio.open(cache_file_path, "rb")
+        image_data = cast(bytes, await f.readall()) # 牛魔我都rb了哪来的str
+        await f.close()
+        return Image(raw=image_data)
+
+    all_expired_cache_file = [
+        p for p in STABLE_RENDER_CACHE_DIR.iterdir()
+        if p.is_file() and p.name.startswith(f"{index_key}_")
+    ]
+
+    for i in all_expired_cache_file:
+        i.unlink()
+
+    image_data = await to_thread(_typst_render, typst_content)
+
+    async with ayafileio.open(STABLE_RENDER_CACHE_DIR / file_name, "wb") as f:
+        await f.write(image_data)
+
+    return Image(raw=image_data)
 
 @single_flight
 async def typst_render(typst_content: str) -> Image:
