@@ -854,28 +854,28 @@ class PandaScoreClient:
         )
         return past + running + upcoming
 
-    @single_flight
     @func_ttl_cache(MAXSIZE)
+    @single_flight
     async def list_past_matches(self) -> list[dict[str, Any]]:
         return await self._list_matches_by_kind("past")
 
-    @single_flight
     @func_ttl_cache(MAXSIZE)
+    @single_flight
     async def list_running_matches(self) -> list[dict[str, Any]]:
         return await self._list_matches_by_kind("running")
 
-    @single_flight
     @func_ttl_cache(MAXSIZE)
+    @single_flight
     async def list_upcoming_matches(self) -> list[dict[str, Any]]:
         return await self._list_matches_by_kind("upcoming")
 
-    @single_flight
     @func_ttl_cache(MAXSIZE)
+    @single_flight
     async def get_match(self, match_id: str) -> dict[str, Any]:
         return await self._get(f"/matches/{match_id}")
 
-    @single_flight
     @func_ttl_cache(MAXSIZE)
+    @single_flight
     async def get_match_score(self, match_id: str) -> dict[str, int] | None:
         match = await self.get_match(match_id)
 
@@ -896,8 +896,8 @@ class PandaScoreClient:
 
         return score
 
-    @single_flight
     @func_ttl_cache(MAXSIZE)
+    @single_flight
     async def get_teams(self, match_id: str) -> list[dict[str, Any]]:
         match = await self.get_match(match_id)
 
