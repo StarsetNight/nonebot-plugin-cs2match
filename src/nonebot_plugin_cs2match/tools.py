@@ -108,12 +108,16 @@ async def typst_render_for_stable_cache(typst_content: str, index_key: str) -> I
         f = ayafileio.open(cache_file_path, "rb")
         image_data = cast(bytes, await f.readall()) # 牛魔我都rb了哪来的str
         await f.close()
+        logger.debug(f"{index_key} 缓存命中")
         return Image(raw=image_data)
 
     all_expired_cache_file = [
         p for p in STABLE_RENDER_CACHE_DIR.iterdir()
         if p.is_file() and p.name.startswith(f"{index_key}_")
     ]
+
+    if len(all_expired_cache_file) > 0:
+        logger.debug(f"清理失效缓存 {len(all_expired_cache_file)} 个")
 
     for i in all_expired_cache_file:
         i.unlink()
@@ -122,6 +126,9 @@ async def typst_render_for_stable_cache(typst_content: str, index_key: str) -> I
 
     async with ayafileio.open(STABLE_RENDER_CACHE_DIR / file_name, "wb") as f:
         await f.write(image_data)
+
+    logger.debug(f"{index_key} 缓存未命中")
+    logger.debug(f"已创建 {STABLE_RENDER_CACHE_DIR / file_name} 缓存")
 
     return Image(raw=image_data)
 

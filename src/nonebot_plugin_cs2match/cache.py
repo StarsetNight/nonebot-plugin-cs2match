@@ -23,19 +23,32 @@ AsyncFunc = Callable[P, Coroutine[Any, Any, T]]
 
 def single_flight(func: AsyncFunc[P, T]) -> AsyncFunc[P, T]:
     tasks: dict[int, Task[T]] = {}
+    waiters: dict[int, int] = {}
+    func_name = getattr(func, "__qualname__", func.__name__)
+
     @wraps(func)
     async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
         nonlocal tasks
         key = hash((args, tuple(sorted(kwargs.items()))))
+
         if key in tasks:
+            waiters[key] = waiters.get(key, 1) + 1
+            logger.debug(f"单飞命中 | 函数={func_name} 键={key} 在途任务数={len(tasks)} 合并计数={waiters[key]}")
             return await tasks[key]
+
         task = create_task(func(*args, **kwargs))
         tasks[key] = task
+        waiters[key] = 1
+        logger.debug(f"单飞未命中 | 函数={func_name} 键={key} 在途任务数={len(tasks)} 合并计数=1")
+
         try:
             result = await task
             return result
         finally:
+            merged = waiters.pop(key, 1)
             tasks.pop(key, None)
+            logger.debug(f"单飞完成 | 函数={func_name} 键={key} 在途任务数={len(tasks)} 合并计数={merged}")
+
     return wrapper
 
 CACHE_TTL = config.cache_ttl
@@ -45,6 +58,7 @@ def func_ttl_cache(maxsize: int) -> Callable[[AsyncFunc[P, T]], AsyncFunc[P, T]]
     def _func_ttl_cache(func: AsyncFunc[P, T]) -> AsyncFunc[P, T]:
         cache: OrderedDict[int, tuple[float, Any]] = OrderedDict()
         maxsize_ = maxsize
+        func_name = getattr(func, "__qualname__", func.__name__)
 
         @wraps(func)
         async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
@@ -53,17 +67,36 @@ def func_ttl_cache(maxsize: int) -> Callable[[AsyncFunc[P, T]], AsyncFunc[P, T]]
             now = time()
 
             if key in cache:
-                ttl, data = cache[key]
-                if ttl > now:
+                expire_at, data = cache[key]
+                if expire_at > now:
+                    logger.debug(
+                        f"缓存命中 | 函数={func_name} 键={key} "
+                        f"当前数量={len(cache)} 剩余有效期={expire_at - now:.2f}秒"
+                    )
                     cache.move_to_end(key)
                     return data
+                logger.debug(f"缓存过期 | 函数={func_name} 键={key} 当前数量={len(cache)}")
                 del cache[key]
+            else:
+                logger.debug(f"缓存未命中 | 函数={func_name} 键={key} 当前数量={len(cache)}")
 
+            start = time()
             data = await func(*args, **kwargs)
-            cache[key] = (now + CACHE_TTL, data)
+            cost = time() - start
+
+            cache[key] = (time() + CACHE_TTL, data)
+            logger.debug(
+                f"缓存写入 | 函数={func_name} 键={key} "
+                f"当前数量={len(cache)} 回源耗时={cost:.3f}秒 "
+                f"有效期={CACHE_TTL}秒"
+            )
 
             while len(cache) > maxsize_:
-                cache.popitem(last=False)
+                evicted_key, _ = cache.popitem(last=False)
+                logger.debug(
+                    f"缓存淘汰 | 函数={func_name} 被淘汰键={evicted_key} "
+                    f"当前数量={len(cache)} 上限={maxsize_}"
+                )
 
             return data
 
