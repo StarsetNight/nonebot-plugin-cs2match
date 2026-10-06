@@ -169,8 +169,7 @@ class RenderCache:
             await self.metadata_db.delete(key)
             return None
 
-        async with ayafileio.open(cache_data_path, "rb") as f:
-            cache_data = cast(bytes, await f.readall())
+        cache_data = await ayafileio.read_bytes(cache_data_path)
 
         await self.metadata_db.set(key, _dump_time(new_expire))
 
@@ -183,8 +182,7 @@ class RenderCache:
 
         cache_file_path = self.cache_path / f"{key.hex().lower()}.png"
 
-        async with ayafileio.open(cache_file_path, "wb") as f:
-            await f.write(data)
+        await ayafileio.write_bytes(cache_file_path, data)
 
         expire = _get_time() + (config.render_cache_renewal_duration * 60)
 

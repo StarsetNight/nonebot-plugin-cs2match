@@ -22,18 +22,15 @@ class DynamicConfigSystem:
 
     @classmethod
     async def from_path(cls, path: Path) -> DynamicConfigSystem:
-        async with ayafileio.open(path, "r", encoding="utf-8") as f:
-            data = await f.readall()
+        data = await ayafileio.read_text(path, encoding="utf-8")
         config = DynamicConfig.model_validate_json(data)
         return DynamicConfigSystem(config, path)
 
     @classmethod
     async def new(cls, path: Path) -> DynamicConfigSystem:
         config = DynamicConfig()
-        async with ayafileio.open(path, "w", encoding="utf-8") as f:
-            await f.write(config.model_dump_json())
+        await ayafileio.write_text(path, config.model_dump_json(), encoding="utf-8")
         return DynamicConfigSystem(config, path)
 
     async def save(self):
-        async with ayafileio.open(self.path, "w", encoding="utf-8") as f:
-            await f.write(self.config.model_dump_json())
+        await ayafileio.write_text(self.path, self.config.model_dump_json(), encoding="utf-8")

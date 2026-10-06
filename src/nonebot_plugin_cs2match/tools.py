@@ -105,9 +105,7 @@ async def typst_render_for_stable_cache(typst_content: str, index_key: str) -> I
     cache_file_path = STABLE_RENDER_CACHE_DIR / file_name
 
     if cache_file_path.exists() and cache_file_path.is_file():
-        f = ayafileio.open(cache_file_path, "rb")
-        image_data = cast(bytes, await f.readall()) # 牛魔我都rb了哪来的str
-        await f.close()
+        image_data = await ayafileio.read_bytes(cache_file_path)
         logger.debug(f"{index_key} 缓存命中")
         return Image(raw=image_data)
 
@@ -124,8 +122,7 @@ async def typst_render_for_stable_cache(typst_content: str, index_key: str) -> I
 
     image_data = await to_thread(_typst_render, typst_content)
 
-    async with ayafileio.open(STABLE_RENDER_CACHE_DIR / file_name, "wb") as f:
-        await f.write(image_data)
+    await ayafileio.write_bytes(STABLE_RENDER_CACHE_DIR / file_name, image_data)
 
     logger.debug(f"{index_key} 缓存未命中")
     logger.debug(f"已创建 {STABLE_RENDER_CACHE_DIR / file_name} 缓存")
