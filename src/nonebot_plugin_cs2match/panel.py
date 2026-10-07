@@ -31,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from nonebot import logger
 from nonebot.drivers import URL, Request
@@ -98,14 +98,15 @@ COMMAND_SPECS: tuple[CommandSpec, ...] = (
 
 
 def is_qq_bot(bot: "Bot") -> bool:
-    """判断 Bot 是否来自 QQ 官方机器人适配器（鸭子类型，不 import 适配器包）。"""
+    """判断 Bot 是否来自 QQ 官方机器人适配器。"""
     adapter = getattr(bot, "adapter", None)
     get_name = getattr(adapter, "get_name", None)
     if not callable(get_name):
         return False
     try:
         return get_name() == "QQ"
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - 第三方适配器的 get_name 实现不可控，谓词不能抛
+        logger.debug(f"适配器 get_name() 调用失败，按非 QQ 处理：{exc}")
         return False
 
 
@@ -177,7 +178,22 @@ class QQPanelClient:
 
     @property
     def api_base(self) -> URL:
-        return self.bot.adapter.get_api_base()
+        """适配器给出的 QQ API 根地址（正式/沙箱由适配器配置决定）。
+
+        ``Bot.adapter`` 的静态类型是基类 ``Adapter``（只有 ``get_name`` /
+        ``config`` / ``request``），``get_api_base`` 定义在
+        ``nonebot.adapters.qq.Adapter`` 上；本模块为了在只装 OneBot 的环境里也能
+        加载，刻意不在导入期引用 QQ 适配器，因此这里按鸭子类型取一次。运行期能走到
+        这里的前提已由调用方 ``is_qq_bot()`` 保证。
+        """
+        get_api_base = getattr(self.bot.adapter, "get_api_base", None)
+        if not callable(get_api_base):
+            raise AttributeError(
+                f"{type(self.bot.adapter).__name__} 不支持 get_api_base()，"
+                "指令面板仅适用于 nonebot-adapter-qq"
+            )
+        # getattr 取回来的可调用对象类型检查器只能看到 object，这里声明成 URL
+        return cast(URL, get_api_base())
 
     def _url(self, *paths: str) -> URL:
         return self.api_base.joinpath(*paths)
@@ -270,7 +286,7 @@ class QQPanelClient:
     async def sync_scope(self, scope: str) -> dict[str, Any]:
         """创建或更新（upsert）指定场景的面板。"""
         panel_id = find_panel_id(await self.list_panels(scope))
-        body = {
+        body: dict[str, Any] = {
             "panel": {
                 "items": build_panel_items(scope),
                 "remark": PANEL_REMARK,

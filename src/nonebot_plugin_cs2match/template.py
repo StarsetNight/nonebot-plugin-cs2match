@@ -16,6 +16,7 @@ help_plain_text = """NoneBot CS2赛事查询帮助
 
 /monitor <slug或队名>
 追加比赛监听，自动推送比赛开始、比分变化和结束状态。
+按战队名搜索时会自动略过已结束/已取消的比赛。
 使用 /monitor cancel 可取消本群全部监听。
 
 /cs2whitelist <on|off>
@@ -110,7 +111,7 @@ help_text = """#set text(font: ("Consolas", "SimHei", "Microsoft YaHei", "PingFa
 
   card(
     "monitor <slug/队名> / 监视",
-    "监视比赛开始、比分变动、结束，参数为“cancel”时取消本群全部监听。"
+    "监视比赛开始、比分变动、结束，参数为“cancel”时取消本群全部监听。按战队名搜索时自动略过已结束/已取消的比赛。"
   ),
   
   card(

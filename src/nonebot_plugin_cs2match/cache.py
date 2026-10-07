@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import ParamSpec, TypeVar, Coroutine, Any, Callable, cast
+from typing import ParamSpec, TypeVar, Coroutine, Any, Callable
 from asyncio import create_task, Task
 from functools import wraps
 from collections import OrderedDict
