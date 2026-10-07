@@ -17,10 +17,12 @@ from .tools import PandaScoreClient, MonitorClient, MatchParser, typst_render, f
 from .template import help_plain_text, help_text
 from .rule import is_enabled
 from .dynamic_config import DynamicConfigSystem, PriorityMode
+from . import panel
 
 require("nonebot_plugin_localstore")
 require("nonebot_plugin_alconna")
 require("nonebot_plugin_uninfo")
+from nonebot.adapters import Bot
 from nonebot_plugin_alconna import Query, on_alconna, UniMessage
 from nonebot_plugin_localstore import get_plugin_data_file
 from nonebot_plugin_uninfo import Uninfo, ADMIN, SceneType
@@ -91,6 +93,18 @@ async def on_shutdown_cleanup():
             panda_client = None
     except Exception as e:
         logger.exception(f"插件资源清理失败：{e}")
+
+
+@driver.on_bot_connect
+async def on_bot_connect_sync_command_panel(bot: Bot):
+    """QQ 机器人连接后把写死的命令帮助同步到「指令面板」（幂等 upsert）。
+
+    面板内容是 panel.py 里写死的常量，没有运行时修改入口；同步失败只记日志，
+    绝不影响机器人运行。
+    """
+    if not panel.is_qq_bot(bot):
+        return
+    await panel.sync_all(bot)
 
 
 get_help = on_alconna(
